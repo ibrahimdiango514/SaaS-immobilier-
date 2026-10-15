@@ -18,3 +18,9 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+VITE_SOFIA_PUBLIC_SUPABASE_KEY = "sb_publishable_utbZhw8dg-2M1-g0nXIhfA_n6dZCDZz"
+VITE_SOFIA_PUBLIC_SUPABASE_URL = "https://xbuuhfwobrafcbgtdgjx.supabase.co"
