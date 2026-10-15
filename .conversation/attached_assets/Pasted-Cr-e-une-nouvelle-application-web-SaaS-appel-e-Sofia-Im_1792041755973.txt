@@ -1,0 +1,49 @@
+Crée une nouvelle application web SaaS appelée Sofia Immobilier, destinée aux agences immobilières de Bamako, au Mali.
+
+Objectif
+
+Construire un tableau de bord immobilier moderne, professionnel, responsive et en français, avec une interface simple à utiliser sur téléphone et ordinateur.
+
+Technologies
+
+- Utilise une stack web moderne compatible avec Replit.
+- Utilise mon projet Supabase existant comme backend, via la connexion Supabase déjà disponible dans Replit.
+- Le schéma métier existant est "saas_immobilier".
+- Réutilise les tables existantes : "agencies", "agency_members", "user_profiles", "properties", "property_media", "contacts", "sales_pipeline".
+- N'utilise pas le schéma "public" pour recréer les tables métier.
+- Ne crée aucune table, migration, fonction SQL ou politique RLS supplémentaire sans mon autorisation explicite.
+
+Design
+
+Crée une interface élégante et professionnelle, avec une barre latérale, une navigation claire, des cartes statistiques, des tableaux lisibles, une recherche et des filtres. L'affichage doit être adapté au mobile. Utilise une palette sobre et une identité visuelle cohérente.
+
+Première version du dashboard
+
+Prépare les pages et la navigation suivantes :
+
+1. Vue d'ensemble.
+2. Biens immobiliers.
+3. Prospects et contacts.
+4. Pipeline commercial.
+5. Agence et membres.
+6. Paramètres.
+
+La vue d'ensemble devra afficher les indicateurs réels disponibles dans Supabase, lorsque les accès seront vérifiés : nombre de biens, biens disponibles, contacts/prospects et opportunités commerciales.
+
+Sécurité impérative
+
+- Respecte Supabase Auth et les politiques RLS existantes.
+- Chaque utilisateur ne doit accéder qu'aux données des agences dont il est membre et autorisé.
+- Ne contourne jamais RLS pour faire fonctionner le dashboard.
+- N'expose aucune clé "service_role", clé secrète ou donnée d'identification dans le navigateur.
+- Ne suppose pas qu'un utilisateur appartient à une agence sans le vérifier.
+- N'invente pas de données présentées comme réelles.
+- Si la connexion ou les permissions ne fonctionnent pas, affiche une erreur explicite plutôt que de simuler des statistiques.
+
+Méthode de travail
+
+Commence par examiner la connexion Supabase disponible dans Replit et identifier les tables, colonnes et relations réellement présentes dans "saas_immobilier". Préserve toutes les données existantes.
+
+Pour cette première étape, crée uniquement la structure de l'application, la navigation et le design initial du dashboard. Ne modifie pas le schéma de la base et ne crée pas de fausses données métier.
+
+À la fin, indique la stack choisie, les fichiers créés, les tables effectivement inspectées et les éventuels problèmes d'accès Supabase. Attends ma validation avant de développer les modules métier.

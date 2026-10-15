@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Sofia Immobilier"
+description = "Tableau de bord immobilier en français pour les agences de Bamako : vue d’ensemble, biens, prospects, pipeline commercial, équipe et paramètres, conçu pour ordinateur et téléphone."
+version = "1.0.0"
+id = "artifacts/sofia-immobilier"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20746
+
+[services.development]
+run = "pnpm --filter @workspace/sofia-immobilier run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sofia-immobilier", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/sofia-immobilier/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20746"
+BASE_PATH = "/"

@@ -1,0 +1,1 @@
+- [Sofia Immobilier scope and Supabase boundary](sofia-immobilier-supabase.md) — French real-estate SaaS for Bamako; preserve the existing schema and Auth/RLS boundaries.
