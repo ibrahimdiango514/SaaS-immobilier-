@@ -414,8 +414,7 @@ export function useUpdateCurrentProfile(userId?: string) {
       if (!userId) throw new Error('Aucune session utilisateur n’est active.');
       const { data, error } = await db()
         .from('user_profiles')
-        .update(input)
-        .eq('id', userId)
+        .upsert({ id: userId, ...input }, { onConflict: 'id' })
         .select('id, full_name, phone, avatar_url, created_at, updated_at')
         .single();
       if (error) throw error;

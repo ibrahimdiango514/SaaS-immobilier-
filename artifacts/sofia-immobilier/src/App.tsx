@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -16,7 +16,6 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
@@ -54,11 +53,21 @@ function AppShell({ children }: { children: ReactNode }) {
   const [path] = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState(false);
+  const [signOutError, setSignOutError] = useState('');
   const { user, signOut } = useAuth();
   const { agencies, activeAgency, activeAgencyId, setActiveAgencyId, activeMembership } = useAgency();
   const { data: profile } = useCurrentProfile(user?.id);
   const name = profile?.full_name || user?.email || 'Mon compte';
   const currentLabel = nav.find((item) => item.href === path)?.label ?? 'Espace de travail';
+  const handleSignOut = async () => {
+    setSignOutError('');
+    try {
+      await signOut();
+    } catch (error) {
+      setSignOutError(getSupabaseErrorMessage(error, 'fermer la session'));
+      setNotice(true);
+    }
+  };
   return <div className="app-shell">
     <div className={`mobile-overlay${menuOpen ? ' is-open' : ''}`} onClick={() => setMenuOpen(false)} data-testid="mobile-navigation-overlay" />
     <aside className={`sidebar${menuOpen ? ' is-open' : ''}`} aria-label="Navigation principale">
@@ -73,14 +82,14 @@ function AppShell({ children }: { children: ReactNode }) {
         {agencies.length > 1 ? <select id="agency-switcher" value={activeAgencyId ?? ''} onChange={(e) => setActiveAgencyId(e.target.value)} data-testid="select-active-agency" aria-label="Choisir une agence">{agencies.map((agency) => <option key={agency.id} value={agency.id}>{agency.name}</option>)}</select> : <div className="agency-label"><strong>{activeAgency?.name ?? 'Aucune agence active'}</strong><span>{activeMembership ? roleNames[activeMembership.role] : 'Accès agence requis'}</span></div>}
         {agencies.length > 1 && <ChevronDown size={14} color="#9aafaa" />}
       </div>
-      <button className="sidebar-signout" onClick={() => void signOut()} data-testid="button-sign-out"><LogOut size={14} /> Se déconnecter</button>
+      <button className="sidebar-signout" onClick={() => void handleSignOut()} data-testid="button-sign-out"><LogOut size={14} /> Se déconnecter</button>
     </aside>
     <div className="main-column">
       <header className="topbar"><div className="breadcrumb"><span>{activeAgency?.name ?? 'Espace agence'}</span><ArrowRight size={12} /><strong>{currentLabel}</strong></div><div className="topbar-tools"><div className="profile-chip" data-testid="display-user-access-status"><div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div><span>{name}</span></div><button type="button" className="icon-button" onClick={() => setNotice(true)} aria-label="Afficher l’état de connexion" data-testid="button-notifications"><CircleHelp size={15} /></button></div></header>
       <header className="mobile-header"><div className="mobile-brand"><BrandMark /><strong>sofia immobilier</strong></div><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">{children}</main>
     </div>
-    {notice && <div className="notice-toast" role="status" data-testid="status-notifications">Session active · accès contrôlé par votre agence.<button onClick={() => setNotice(false)} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
+    {notice && <div className="notice-toast" role={signOutError ? 'alert' : 'status'} data-testid="status-notifications">{signOutError || 'Session active · accès contrôlé par votre agence.'}<button onClick={() => setNotice(false)} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
   </div>;
 }
 
@@ -99,7 +108,7 @@ function LoadingRows({ label = 'Chargement des données' }: { label?: string }) 
 function NoAgency({ isLoading, error, retry }: { isLoading: boolean; error: Error | null; retry: () => void }) {
   if (isLoading) return <LoadingRows label="Vérification des accès agence" />;
   if (error) return <ErrorState error={error} retry={retry} testId="status-membership-error" />;
-  return <div className="state-card" data-testid="empty-membership"><div className="state-icon"><LockKeyhole size={19} /></div><span className="state-kicker">Accès requis</span><h2>Aucune agence active associée</h2><p>Ce compte ne possède pas encore d’adhésion active à une agence. Demandez à un administrateur de vérifier vos accès.</p><Link href="/parametres" className="text-action" data-testid="link-membership-settings">Voir mon profil <ArrowRight size={14} /></Link></div>;
+  return <div className="state-card" data-testid="empty-membership"><div className="state-icon"><LockKeyhole size={19} /></div><span className="state-kicker">Accès requis</span><h2>Aucune agence active associée</h2><p>Ce compte ne possède pas encore d’adhésion active à une agence. Demandez à un administrateur de vérifier vos accès.</p></div>;
 }
 function useSafeRetry(query: { refetch: () => unknown }) { return () => { void query.refetch(); }; }
 function WorkspaceGate({ children }: { children: ReactNode }) {
@@ -129,7 +138,7 @@ function Overview() {
   return <><Heading eyebrow="Votre activité" title="Vue d’ensemble" description="Les repères essentiels de votre agence, à jour et accessibles." /><section className="status-banner" data-testid="status-dashboard-access"><div className="status-banner-icon"><ShieldCheck size={15} /></div><div><strong>Votre espace de travail est synchronisé</strong><p>Les indicateurs ci-dessous reflètent les données actuellement accessibles pour votre agence.</p></div><span className="status-tag">Accès actif</span></section>
     <section className="stat-grid" aria-label="Indicateurs de l’agence">{stats.map(({ label, count, foot, icon: Icon }, i) => <article className="stat-card" key={label} data-testid={`card-stat-${i + 1}`}><div className="stat-top"><span>{label}</span><span className="stat-icon"><Icon size={14} /></span></div><div className="stat-value" data-testid={`value-stat-${i + 1}`}>{count}</div><div className="stat-foot">{foot}</div></article>)}</section>
     <section className="overview-grid"><article className="panel"><div className="panel-head"><div><h2>Biens récemment ajoutés</h2><p>Les derniers dossiers du portefeuille</p></div><Link href="/biens" className="text-action" data-testid="link-view-properties">Tous les biens <ArrowRight size={13} /></Link></div>
-      {properties.error ? <div className="inline-error" data-testid="status-recent-properties-error">Impossible de charger la liste des biens.</div> : latest.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Référence</th><th>Bien</th><th>Localisation</th><th>Statut</th></tr></thead><tbody>{latest.map((p) => <tr key={p.id} data-testid={`row-recent-property-${p.id}`}><td><strong>{p.reference}</strong></td><td>{p.title}</td><td>{p.neighborhood || p.city || '—'}</td><td><span className={`status-pill status-${p.status}`}>{propertyStatus[p.status] ?? p.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-table" data-testid="empty-recent-properties"><div className="empty-table-mark"><Home size={17} /></div><strong>Aucun bien enregistré</strong><p>Les biens ajoutés par votre équipe apparaîtront ici.</p><Link href="/biens" className="text-action" data-testid="link-add-first-property">Ajouter un bien <ArrowRight size={13} /></Link></div>}</article>
+       {properties.error ? <ErrorState error={properties.error} retry={useSafeRetry(properties)} testId="status-recent-properties-error" /> : latest.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Référence</th><th>Bien</th><th>Localisation</th><th>Statut</th></tr></thead><tbody>{latest.map((p) => <tr key={p.id} data-testid={`row-recent-property-${p.id}`}><td><strong>{p.reference}</strong></td><td>{p.title}</td><td>{p.neighborhood || p.city || '—'}</td><td><span className={`status-pill status-${p.status}`}>{propertyStatus[p.status] ?? p.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-table" data-testid="empty-recent-properties"><div className="empty-table-mark"><Home size={17} /></div><strong>Aucun bien enregistré</strong><p>Les biens ajoutés par votre équipe apparaîtront ici.</p><Link href="/biens" className="text-action" data-testid="link-add-first-property">Ajouter un bien <ArrowRight size={13} /></Link></div>}</article>
       <article className="panel readiness-panel"><div className="readiness-title"><h2>Repères d’agence</h2><span>Vue du jour</span></div><p className="readiness-intro">Gardez une lecture claire de votre portefeuille et des échanges à poursuivre.</p><div className="readiness-list"><Link href="/biens" className="readiness-row" data-testid="link-overview-properties"><div className="readiness-icon"><Home size={14} /></div><div className="readiness-copy"><strong>Biens disponibles</strong><span>{summary.data?.availableProperties ?? 0} actuellement en commercialisation</span></div><ArrowRight size={14} /></Link><Link href="/contacts" className="readiness-row" data-testid="link-overview-contacts"><div className="readiness-icon"><ContactRound size={14} /></div><div className="readiness-copy"><strong>Suivi des contacts</strong><span>{summary.data?.contacts ?? 0} fiches dans votre espace</span></div><ArrowRight size={14} /></Link><Link href="/pipeline" className="readiness-row" data-testid="link-overview-pipeline"><div className="readiness-icon"><SlidersHorizontal size={14} /></div><div className="readiness-copy"><strong>Pipeline commercial</strong><span>{summary.data?.opportunities ?? 0} opportunités à suivre</span></div><ArrowRight size={14} /></Link></div><div className="notice-box"><CircleHelp size={14} /> Les membres sont visibles par rôle uniquement afin de préserver la confidentialité de leurs profils.</div></article></section></>;
 }
 
@@ -145,17 +154,20 @@ const propertySchema = z.object({
   title: z.string().trim().min(1, 'Le titre est obligatoire'),
   transaction_type: z.enum(['sale', 'rent', 'lease']),
   property_type: z.string().trim().min(1, 'Le type de bien est obligatoire'),
-  price: z.coerce.number().positive('Le montant doit être supérieur à zéro'),
+  price: z.coerce.number().min(0, 'Le montant ne peut pas être négatif'),
   currency: z.string().trim().min(1, 'La devise est obligatoire'),
   status: z.enum(['available', 'reserved', 'sold', 'rented', 'unavailable', 'draft', 'archived']),
   neighborhood: z.string().optional(), city: z.string().optional(), address: z.string().optional(),
-  description: z.string().optional(), bedrooms: z.string().optional(), bathrooms: z.string().optional(), area_m2: z.string().optional(),
+  description: z.string().optional(),
+  bedrooms: z.string().optional().refine((value) => !value || (Number.isInteger(Number(value)) && Number(value) >= 0), 'Le nombre de chambres doit être un entier positif ou nul'),
+  bathrooms: z.string().optional().refine((value) => !value || (Number.isInteger(Number(value)) && Number(value) >= 0), 'Le nombre de salles d’eau doit être un entier positif ou nul'),
+  area_m2: z.string().optional().refine((value) => !value || Number(value) > 0, 'La surface doit être supérieure à zéro'),
 });
 type PropertyFormValues = z.infer<typeof propertySchema>;
 function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean; onOpenChange: (open: boolean) => void; item: PropertyRow | null; currency: string }) {
   const { activeAgencyId } = useAgency();
   const create = useCreateProperty(activeAgencyId); const update = useUpdateProperty(activeAgencyId);
-  const form = useForm<PropertyFormValues>({ resolver: zodResolver(propertySchema), defaultValues: { reference: '', title: '', transaction_type: 'sale', property_type: '', price: 0, currency, status: 'available', neighborhood: '', city: 'Bamako', address: '', description: '', bedrooms: '', bathrooms: '', area_m2: '' } });
+  const form = useForm<PropertyFormValues>({ resolver: zodResolver(propertySchema), defaultValues: { reference: '', title: '', transaction_type: 'sale', property_type: '', price: 0, currency, status: 'draft', neighborhood: '', city: 'Bamako', address: '', description: '', bedrooms: '', bathrooms: '', area_m2: '' } });
   const [formError, setFormError] = useState('');
   const isBusy = create.isPending || update.isPending;
   const submit = async (values: PropertyFormValues) => {
@@ -168,9 +180,9 @@ function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean;
     <Form {...form}><form onSubmit={form.handleSubmit(submit)} className="entity-form">
       <div className="form-grid"><FormField control={form.control} name="reference" render={({ field }) => <FormItem><FormLabel>Référence</FormLabel><FormControl><Input {...field} data-testid="input-property-reference" placeholder="Ex. BI-024" /></FormControl><FormMessage /></FormItem>} /><FormField control={form.control} name="title" render={({ field }) => <FormItem><FormLabel>Intitulé</FormLabel><FormControl><Input {...field} data-testid="input-property-title" placeholder="Villa, appartement…" /></FormControl><FormMessage /></FormItem>} /></div>
       <div className="form-grid"><FormField control={form.control} name="transaction_type" render={({ field }) => <FormItem><FormLabel>Transaction</FormLabel><FormControl><select {...field} className="form-select" data-testid="select-property-transaction"><option value="sale">Vente</option><option value="rent">Location</option><option value="lease">Bail</option></select></FormControl></FormItem>} /><FormField control={form.control} name="property_type" render={({ field }) => <FormItem><FormLabel>Type de bien</FormLabel><FormControl><Input {...field} data-testid="input-property-type" placeholder="Villa, terrain…" /></FormControl><FormMessage /></FormItem>} /></div>
-      <div className="form-grid three-col"><FormField control={form.control} name="price" render={({ field }) => <FormItem><FormLabel>Prix</FormLabel><FormControl><Input type="number" min="1" {...field} data-testid="input-property-price" /></FormControl><FormMessage /></FormItem>} /><FormField control={form.control} name="currency" render={({ field }) => <FormItem><FormLabel>Devise</FormLabel><FormControl><Input {...field} data-testid="input-property-currency" /></FormControl><FormMessage /></FormItem>} /><FormField control={form.control} name="status" render={({ field }) => <FormItem><FormLabel>Statut</FormLabel><FormControl><select {...field} className="form-select" data-testid="select-property-status">{Object.entries(propertyStatus).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></FormControl></FormItem>} /></div>
+       <div className="form-grid three-col"><FormField control={form.control} name="price" render={({ field }) => <FormItem><FormLabel>Prix</FormLabel><FormControl><Input type="number" min="0" {...field} data-testid="input-property-price" /></FormControl><FormMessage /></FormItem>} /><FormField control={form.control} name="currency" render={({ field }) => <FormItem><FormLabel>Devise</FormLabel><FormControl><Input {...field} data-testid="input-property-currency" /></FormControl><FormMessage /></FormItem>} /><FormField control={form.control} name="status" render={({ field }) => <FormItem><FormLabel>Statut</FormLabel><FormControl><select {...field} className="form-select" data-testid="select-property-status">{Object.entries(propertyStatus).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></FormControl></FormItem>} /></div>
       <div className="form-grid"><FormField control={form.control} name="neighborhood" render={({ field }) => <FormItem><FormLabel>Quartier</FormLabel><FormControl><Input {...field} data-testid="input-property-neighborhood" /></FormControl></FormItem>} /><FormField control={form.control} name="city" render={({ field }) => <FormItem><FormLabel>Ville</FormLabel><FormControl><Input {...field} data-testid="input-property-city" /></FormControl></FormItem>} /></div>
-      <div className="form-grid three-col">{(['bedrooms', 'bathrooms', 'area_m2'] as const).map((key) => <FormField key={key} control={form.control} name={key} render={({ field }) => <FormItem><FormLabel>{key === 'bedrooms' ? 'Chambres' : key === 'bathrooms' ? 'Salles d’eau' : 'Surface m²'}</FormLabel><FormControl><Input type="number" min="0" {...field} data-testid={`input-property-${key}`} /></FormControl></FormItem>} />)}</div>
+       <div className="form-grid three-col">{(['bedrooms', 'bathrooms', 'area_m2'] as const).map((key) => <FormField key={key} control={form.control} name={key} render={({ field }) => <FormItem><FormLabel>{key === 'bedrooms' ? 'Chambres' : key === 'bathrooms' ? 'Salles d’eau' : 'Surface m²'}</FormLabel><FormControl><Input type="number" min={key === 'area_m2' ? '0.01' : '0'} step={key === 'area_m2' ? '0.01' : '1'} {...field} data-testid={`input-property-${key}`} /></FormControl><FormMessage /></FormItem>} />)}</div>
       <FormField control={form.control} name="address" render={({ field }) => <FormItem><FormLabel>Adresse</FormLabel><FormControl><Input {...field} data-testid="input-property-address" /></FormControl></FormItem>} /><FormField control={form.control} name="description" render={({ field }) => <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea {...field} data-testid="input-property-description" /></FormControl></FormItem>} />
       {formError && <p className="form-error" role="alert" data-testid="status-property-form-error">{formError}</p>}<div className="form-actions"><Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-property">Annuler</Button><Button type="submit" disabled={isBusy} data-testid="button-submit-property">{isBusy ? 'Enregistrement…' : item ? 'Enregistrer les modifications' : 'Créer le bien'}</Button></div>
     </form></Form>
@@ -220,13 +232,13 @@ const pipelineSchema = z.object({ client_id: z.string().min(1, 'Choisissez un co
 type PipelineFormValues = z.infer<typeof pipelineSchema>;
 function PipelineDialog({ open, onOpenChange, item, contacts, properties }: { open: boolean; onOpenChange: (open: boolean) => void; item: SalesPipelineRow | null; contacts: ContactRow[]; properties: PropertyRow[] }) {
   const { activeAgencyId } = useAgency(); const create = useCreatePipelineItem(activeAgencyId); const update = useUpdatePipelineItem(activeAgencyId); const [formError, setFormError] = useState('');
-  const form = useForm<PipelineFormValues>({ resolver: zodResolver(pipelineSchema), defaultValues: { client_id: item?.client_id ?? '', property_id: item?.property_id ?? '', etape: item?.etape ?? 'Nouveau', probabilite: item?.probabilite ?? 10, date_visite: item?.date_visite?.slice(0, 10) ?? '', notes: item?.notes ?? '' } });
+   const form = useForm<PipelineFormValues>({ resolver: zodResolver(pipelineSchema), defaultValues: { client_id: item?.client_id ?? '', property_id: item?.property_id ?? '', etape: item?.etape ?? 'nouveau', probabilite: item?.probabilite ?? 0, date_visite: item?.date_visite?.slice(0, 10) ?? '', notes: item?.notes ?? '' } });
   const submit = async (v: PipelineFormValues) => { const input: PipelineCreateInput = { client_id: v.client_id, property_id: v.property_id, etape: v.etape, probabilite: v.probabilite, date_visite: v.date_visite || null, notes: v.notes || null }; try { if (item) await update.mutateAsync({ id: item.id, input }); else await create.mutateAsync(input); onOpenChange(false); } catch (e) { setFormError(getSupabaseErrorMessage(e, item ? 'modifier l’opportunité' : 'créer l’opportunité')); } };
   const busy = create.isPending || update.isPending;
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="form-dialog"><DialogHeader><span className="form-kicker">Suivi commercial</span><DialogTitle>{item ? 'Modifier l’opportunité' : 'Nouvelle opportunité'}</DialogTitle><DialogDescription>Associez un contact à un bien pour suivre la progression du dossier.</DialogDescription></DialogHeader><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="entity-form">
     <FormField control={form.control} name="client_id" render={({ field }) => <FormItem><FormLabel>Contact</FormLabel><FormControl><select {...field} className="form-select" data-testid="select-pipeline-contact"><option value="">Choisir un contact</option>{contacts.map((c) => <option key={c.id} value={c.id}>{c.first_name} {c.last_name}</option>)}</select></FormControl><FormMessage /></FormItem>} />
     <FormField control={form.control} name="property_id" render={({ field }) => <FormItem><FormLabel>Bien concerné</FormLabel><FormControl><select {...field} className="form-select" data-testid="select-pipeline-property"><option value="">Choisir un bien</option>{properties.map((p) => <option key={p.id} value={p.id}>{p.reference} · {p.title}</option>)}</select></FormControl><FormMessage /></FormItem>} />
-    <div className="form-grid"><FormField control={form.control} name="etape" render={({ field }) => <FormItem><FormLabel>Étape</FormLabel><FormControl><select {...field} className="form-select" data-testid="select-pipeline-stage">{['Nouveau', 'Premier contact', 'Visite prévue', 'Négociation', 'Offre reçue', 'Conclu'].map((stage) => <option key={stage} value={stage}>{stage}</option>)}</select></FormControl></FormItem>} /><FormField control={form.control} name="probabilite" render={({ field }) => <FormItem><FormLabel>Probabilité (%)</FormLabel><FormControl><Input type="number" min="0" max="100" {...field} data-testid="input-pipeline-probability" /></FormControl><FormMessage /></FormItem>} /></div>
+     <div className="form-grid"><FormField control={form.control} name="etape" render={({ field }) => <FormItem><FormLabel>Étape</FormLabel><FormControl><Input {...field} placeholder="nouveau" data-testid="input-pipeline-stage" /></FormControl><FormMessage /></FormItem>} /><FormField control={form.control} name="probabilite" render={({ field }) => <FormItem><FormLabel>Probabilité (%)</FormLabel><FormControl><Input type="number" min="0" max="100" {...field} data-testid="input-pipeline-probability" /></FormControl><FormMessage /></FormItem>} /></div>
     <FormField control={form.control} name="date_visite" render={({ field }) => <FormItem><FormLabel>Date de visite</FormLabel><FormControl><Input type="date" {...field} data-testid="input-pipeline-visit-date" /></FormControl></FormItem>} /><FormField control={form.control} name="notes" render={({ field }) => <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea {...field} data-testid="input-pipeline-notes" /></FormControl></FormItem>} />
     {formError && <p className="form-error" role="alert" data-testid="status-pipeline-form-error">{formError}</p>}<div className="form-actions"><Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-pipeline">Annuler</Button><Button type="submit" disabled={busy} data-testid="button-submit-pipeline">{busy ? 'Enregistrement…' : item ? 'Enregistrer les modifications' : 'Créer l’opportunité'}</Button></div>
   </form></Form></DialogContent></Dialog>;
@@ -277,10 +289,37 @@ function SettingsPage() {
   </>;
 }
 
+const loginSchema = z.object({
+  email: z.string().trim().email('Adresse e-mail invalide'),
+  password: z.string().min(1, 'Le mot de passe est obligatoire'),
+});
+type LoginFormValues = z.infer<typeof loginSchema>;
+
 function Login() {
-  const { signIn, configurationError, initializationError } = useAuth(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const submit = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); setError(''); setBusy(true); try { await signIn(email.trim(), password); } catch (e) { setError(getSupabaseErrorMessage(e, 'ouvrir une session')); } finally { setBusy(false); } };
-  return <div className="login-page"><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><form onSubmit={submit} className="login-form"><Label htmlFor="login-email">Adresse e-mail</Label><div className="login-input-wrap"><Mail size={15} /><Input id="login-email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="vous@agence.ml" data-testid="input-login-email" /></div><Label htmlFor="login-password">Mot de passe</Label><div className="login-input-wrap"><LockKeyhole size={15} /><Input id="login-password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Votre mot de passe" data-testid="input-login-password" /></div>{(error || configurationError || initializationError) && <p className="form-error" role="alert" data-testid="status-login-error">{error || configurationError || initializationError}</p>}<Button type="submit" className="login-submit" disabled={busy || !!configurationError || !!initializationError} data-testid="button-login-submit">{busy ? 'Connexion…' : 'Se connecter'} <ArrowRight size={15} /></Button></form><div className="login-footnote"><ShieldCheck size={14} /> Les nouvelles inscriptions sont gérées par l’administrateur de votre agence.</div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
+  const { user, signIn, configurationError, initializationError } = useAuth();
+  const form = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: { email: '', password: '' },
+  });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (values: LoginFormValues) => {
+    setError('');
+    setBusy(true);
+    try {
+      await signIn(values.email, values.password);
+    } catch (e) {
+      setError(getSupabaseErrorMessage(e, 'ouvrir une session'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (user) return <div className="auth-loading"><div className="state-card"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Session déjà ouverte</h2><p>Votre compte est déjà connecté à Sofia Immobilier.</p><Link href="/" className="text-action" data-testid="link-continue-workspace">Continuer vers l’espace agence <ArrowRight size={14} /></Link></div></div>;
+  return <div className="login-page"><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
+    <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="vous@agence.ml" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />
+    <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type="password" autoComplete="current-password" placeholder="Votre mot de passe" data-testid="input-login-password" /></FormControl></div><FormMessage /></FormItem>} />
+    {(error || configurationError || initializationError) && <p className="form-error" role="alert" data-testid="status-login-error">{error || configurationError || initializationError}</p>}<Button type="submit" className="login-submit" disabled={busy || !!configurationError || !!initializationError} data-testid="button-login-submit">{busy ? 'Connexion…' : 'Se connecter'} <ArrowRight size={15} /></Button>
+  </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Les nouvelles inscriptions sont gérées par l’administrateur de votre agence.</div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
 }
 
 function RoutedContent() {
