@@ -1,0 +1,74 @@
+Poursuis directement le développement de Sofia Immobilier dans le projet existant. Ne recommence pas le projet et ne dépense pas le quota dans une nouvelle série d'audits. Les tests de base sont satisfaisants. Nous effectuerons un audit global à la fin.
+
+OBJECTIF : construire maintenant un dashboard SaaS immobilier complet, moderne, responsive et présentable à des agences immobilières de Bamako.
+
+CONSERVER :
+
+- La stack et l'architecture déjà en place.
+- Supabase Auth et les clients existants basés sur @supabase/ssr et @supabase/supabase-js.
+- Le schéma métier existant "saas_immobilier".
+- Les tables, relations, permissions RLS et données existantes.
+- Les pages et fonctionnalités qui fonctionnent déjà.
+
+1. STRUCTURE GÉNÉRALE
+   Créer une interface cohérente avec une sidebar responsive, une barre supérieure avec agence active, profil utilisateur, notifications et navigation mobile. Ajouter un état actif clair pour chaque rubrique, ainsi que des états de chargement, erreur et absence de données.
+
+2. DASHBOARD
+   Créer une vue d'ensemble professionnelle avec :
+
+- Nombre total de biens et biens disponibles.
+- Biens loués et vendus, uniquement si les statuts correspondants existent réellement.
+- Nombre de contacts et prospects actifs.
+- Opportunités commerciales par étape.
+- Indicateurs de conversion calculés uniquement lorsque les données nécessaires existent.
+- Graphiques d'évolution et listes des activités récentes, seulement lorsque les données permettent de les calculer.
+- Montants en FCFA/XOF et dates au format français.
+
+Tous les KPI doivent être calculés depuis Supabase pour l'agence active et les données accessibles à l'utilisateur. Ne génère pas de chiffres artificiels pour remplir les cartes.
+
+3. BIENS IMMOBILIERS
+   Améliorer la liste et les fiches de biens avec :
+
+- Affichage en cartes et en tableau si pertinent.
+- Recherche, filtres par statut, type, quartier et prix.
+- Prix en FCFA, localisation, superficie, nombre de chambres et détails disponibles.
+- Formulaires de création et modification adaptés aux colonnes réelles.
+- Gestion visuelle des photos si le stockage existant le permet, sans rendre public un bucket privé.
+- Validation des champs et messages de succès/erreur.
+
+Ne suppose pas qu'une colonne existe : vérifie le code et les types déjà présents avant de l'utiliser.
+
+4. CONTACTS ET CRM
+   Améliorer les contacts et les prospects : recherche, filtres, fiches détaillées, coordonnées autorisées, historique si disponible, création et modification. Améliorer le pipeline commercial avec une visualisation claire par étape, les montants uniquement s'ils existent dans les données et le suivi des prochaines actions lorsque le modèle le permet.
+
+5. AGENCE ET PROFIL
+   Créer ou finaliser les pages de consultation du profil utilisateur, de l'agence active et de ses membres. Réserver les actions d'administration aux rôles autorisés. Préserver les règles de visibilité des profils et des membres.
+
+6. NAVIGATION DES FUTURS MODULES
+   Préparer une navigation claire pour :
+
+- Visites
+- Conversations WhatsApp
+- Assistant IA immobilier
+- Automatisations
+- Paramètres
+
+N'affiche pas ces modules comme fonctionnels si leurs services et leurs données ne sont pas implémentés. Tu peux présenter un état « Bientôt disponible » et prévoir une architecture extensible.
+
+7. SÉCURITÉ ET DONNÉES
+
+- Toute lecture et écriture métier doit utiliser la session réelle de l'utilisateur et les permissions existantes.
+- Toujours respecter l'isolation entre agences et les politiques RLS.
+- Ne jamais utiliser une clé service_role dans le navigateur.
+- Ne pas faire confiance à un agency_id envoyé par le client sans vérifier l'adhésion autorisée.
+- Ne jamais exposer les données d'une autre agence.
+- Ne créer aucune table, colonne, fonction SQL, migration ou politique RLS.
+- Ne supprimer, réinitialiser ou modifier aucune donnée existante pour remplir le dashboard.
+- Ne créer aucun compte de test.
+
+8. EXÉCUTION
+   Travaille directement sur le code existant et réutilise les composants et hooks disponibles. Évite les réécritures inutiles et les nouvelles dépendances si elles ne sont pas indispensables. Corrige les erreurs TypeScript et de compilation introduites par tes modifications.
+
+À la fin, fournis un résumé concis des pages et composants créés ou modifiés, des fonctionnalités réellement opérationnelles, des éléments encore simulés ou en attente et du résultat de la compilation. Ne prétends pas avoir testé une session réelle si ce n'est pas le cas.
+
+Commence directement l'implémentation et ne me redemande pas de valider un plan d'audit.
