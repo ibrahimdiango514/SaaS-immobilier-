@@ -1,0 +1,57 @@
+Je veux réaliser un audit technique et fonctionnel complet de mon projet existant Sofia Immobilier avant d'ajouter de nouvelles fonctionnalités.
+
+IMPORTANT : pour cette première étape, tu dois uniquement inspecter et analyser le projet. Ne modifie aucun fichier et n'effectue aucune action sur la base de données.
+
+1. Architecture
+
+- Identifie le framework, les technologies et la structure réelle du projet.
+- Présente les pages et composants existants.
+- Vérifie la configuration et les dépendances.
+
+2. Fonctionnalités
+
+Inspecte chacune de ces parties et indique si elle est fonctionnelle, partiellement fonctionnelle ou absente :
+
+- Tableau de bord et indicateurs KPI.
+- Gestion des biens immobiliers.
+- Contacts et prospects.
+- Pipeline commercial.
+- Conversations et contacts WhatsApp, si présents.
+- Visites immobilières, si présentes.
+- Agence, membres, rôles et profil utilisateur.
+
+Pour chaque module, précise ce qui fonctionne réellement et ce qui reste à faire. Ne te base pas uniquement sur l'apparence de l'interface.
+
+3. Supabase et sécurité
+
+- Identifie les tables et le schéma réellement utilisés.
+- Vérifie comment l'authentification et les requêtes sont implémentées.
+- Examine les politiques RLS et l'isolation des données entre agences, dans la mesure où tu peux les vérifier sans rien modifier.
+- Vérifie la gestion des clés et des variables d'environnement sans afficher aucune valeur secrète.
+- Vérifie si le stockage des photos est public ou privé, si cette information est accessible.
+
+Ne désactive aucune politique RLS. Ne modifie aucune donnée, table, migration, variable d'environnement ou configuration Supabase.
+
+4. Qualité technique
+
+Si les commandes et l'environnement le permettent, exécute les vérifications non destructives disponibles :
+
+- TypeScript / typecheck.
+- Tests automatisés.
+- Build de production.
+
+Indique les commandes exécutées, leurs résultats réels et les vérifications impossibles à effectuer. Ne prétends pas avoir exécuté un test si ce n'est pas le cas.
+
+5. Rapport final
+
+Présente le résultat en français avec :
+
+1. Résumé de l'état actuel du projet.
+2. Fonctionnalités opérationnelles.
+3. Fonctionnalités incomplètes ou absentes.
+4. Bugs et risques de sécurité constatés.
+5. Résultats des vérifications techniques.
+6. Les 5 corrections les plus prioritaires.
+7. Un plan d'action par étapes, en commençant par les problèmes les plus importants.
+
+Ne corrige encore rien. Ne lance aucune migration et ne touche à aucune donnée réelle. Termine en attendant ma validation avant toute modification.
