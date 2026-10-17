@@ -1,0 +1,18 @@
+[build]
+  command = "pnpm --filter @workspace/sofia-immobilier run build"
+  publish = "artifacts/sofia-immobilier/dist/public"
+
+[build.environment]
+  NODE_VERSION = "22"
+  PNPM_VERSION = "10.18.0"
+  PORT = "3000"
+  BASE_PATH = "/"
+  # Clés publiques Supabase (faites pour être visibles dans le navigateur)
+  VITE_SOFIA_PUBLIC_SUPABASE_URL = "https://xbuuhfwobrafcbgtdgjx.supabase.co"
+  VITE_SOFIA_PUBLIC_SUPABASE_KEY = "sb_publishable_utbZhw8dg-2M1-g0nXIhfA_n6dZCDZz"
+
+# Pages internes de l'application (SPA)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
