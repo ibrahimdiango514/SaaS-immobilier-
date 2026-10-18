@@ -18,6 +18,7 @@ export type PropertyStatus =
   | 'draft'
   | 'archived';
 export type ContactStatus = 'lead' | 'prospect' | 'client' | 'inactive';
+export type PropertyMediaType = 'photo' | 'video' | 'document';
 
 export interface AgencyRow {
   id: string;
@@ -83,7 +84,7 @@ export interface PropertyMediaRow {
   id: string;
   agency_id: string;
   property_id: string;
-  media_type: string;
+  media_type: PropertyMediaType;
   storage_path: string;
   public_url: string | null;
   file_name: string;

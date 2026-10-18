@@ -12,6 +12,13 @@ import type {
   UserProfileRow,
 } from './database.types';
 import { getSupabaseClient, getSupabaseErrorMessage } from './supabase';
+import {
+  propertyImageObjectPath,
+  propertyMediaDeleteStorageAction,
+  propertyMediaInsertFailureAction,
+  propertyStorageUploadFailureAction,
+  validatePropertyImage,
+} from './property-media-utils.js';
 
 const db = () => getSupabaseClient().schema('saas_immobilier');
 
@@ -100,35 +107,10 @@ export type PropertyMediaPreview = PropertyMediaRow & {
 };
 export type PropertyMediaUploadInput = {
   file: File;
-  propertyReference: string;
   sortOrder: number;
 };
 
 const PROPERTY_IMAGES_BUCKET = 'property-images';
-const MAX_PROPERTY_IMAGE_SIZE = 10 * 1024 * 1024;
-const SUPPORTED_PROPERTY_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-
-function sanitizePropertyReference(reference: string) {
-  return reference.trim().replace(/[^A-Za-z0-9_-]+/g, '').toUpperCase().slice(0, 24) || 'BIEN';
-}
-
-function validatePropertyImage(file: File) {
-  if (!SUPPORTED_PROPERTY_IMAGE_TYPES.has(file.type)) {
-    throw new Error('Utilisez une image JPG, PNG ou WebP.');
-  }
-  if (file.size > MAX_PROPERTY_IMAGE_SIZE) {
-    throw new Error('Chaque image doit peser 10 Mo maximum.');
-  }
-}
-
-function propertyImageFileName(name: string) {
-  return name
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 100) || 'photo';
-}
 
 export function usePropertyMedia(agencyId?: string, propertyId?: string) {
   return useQuery({
@@ -165,32 +147,23 @@ export function usePropertyMedia(agencyId?: string, propertyId?: string) {
   });
 }
 
-export function useUploadPropertyMedia(agencyId?: string, propertyId?: string) {
+export function useUploadPropertyMedia(
+  agencyId?: string,
+  propertyId?: string,
+  canUpload = false,
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: PropertyMediaUploadInput) => {
-      if (!agencyId || !propertyId) throw new Error('Aucune agence ni aucun bien actif n’est sélectionné.');
+      if (!agencyId || !propertyId) {
+        throw new Error('Aucune agence ni aucun bien actif n’est sélectionné.');
+      }
+      if (!canUpload) {
+        throw new Error('Votre rôle ne permet pas d’ajouter des photos à ce bien.');
+      }
       validatePropertyImage(input.file);
 
-      const objectPath = `properties/${sanitizePropertyReference(input.propertyReference)}/${crypto.randomUUID()}-${propertyImageFileName(input.file.name)}`;
-      const { data: media, error: mediaError } = await db()
-        .from('property_media')
-        .insert({
-          agency_id: agencyId,
-          property_id: propertyId,
-          media_type: 'image',
-          storage_path: objectPath,
-          public_url: null,
-          file_name: input.file.name,
-          mime_type: input.file.type,
-          file_size: input.file.size,
-          sort_order: Math.max(0, Math.trunc(input.sortOrder)),
-          metadata: {},
-        })
-        .select('id, agency_id, property_id, media_type, storage_path, public_url, file_name, mime_type, file_size, sort_order, metadata, created_at')
-        .single();
-      if (mediaError) throw mediaError;
-
+      const objectPath = propertyImageObjectPath(agencyId, propertyId, input.file.name);
       const storage = getSupabaseClient().storage.from(PROPERTY_IMAGES_BUCKET);
       const { error: uploadError } = await storage.upload(objectPath, input.file, {
         cacheControl: '1800',
@@ -198,20 +171,76 @@ export function useUploadPropertyMedia(agencyId?: string, propertyId?: string) {
         upsert: false,
       });
       if (uploadError) {
-        const message = getSupabaseErrorMessage(uploadError, 'envoyer la photo');
-        const { error: statusError } = await db()
-          .from('property_media')
-          .update({ metadata: { upload_failed: true, upload_error: message } })
-          .eq('id', media.id)
-          .eq('agency_id', agencyId)
-          .eq('property_id', propertyId);
-        if (statusError) {
-          throw new Error(`${message} Le suivi de l’échec n’a pas pu être enregistré : ${getSupabaseErrorMessage(statusError, 'mettre à jour la fiche photo')}`);
+        if (propertyStorageUploadFailureAction(uploadError) === 'do-not-clean') {
+          throw uploadError;
         }
-        throw new Error(message);
+        const uploadMessage = getSupabaseErrorMessage(uploadError, 'envoyer la photo');
+        const { error: cleanupError } = await storage.remove([objectPath]);
+        if (cleanupError) {
+          throw new Error(
+            `${uploadMessage} Le nettoyage a échoué; un administrateur doit vérifier le chemin ${objectPath}. ` +
+              getSupabaseErrorMessage(cleanupError, 'nettoyer le téléversement'),
+          );
+        }
+        throw uploadError;
       }
 
-      return media;
+      const { error: mediaError } = await db()
+        .from('property_media')
+        .insert({
+          agency_id: agencyId,
+          property_id: propertyId,
+          media_type: 'photo',
+          storage_path: objectPath,
+          public_url: null,
+          file_name: input.file.name,
+          mime_type: input.file.type,
+          file_size: input.file.size,
+          sort_order: Math.max(0, Math.trunc(input.sortOrder)),
+          metadata: {},
+        });
+
+      if (mediaError) {
+        const registrationMessage = getSupabaseErrorMessage(
+          mediaError,
+          'enregistrer la fiche de la photo',
+        );
+        const { data: existingMedia, error: verificationError } = await db()
+          .from('property_media')
+          .select('id')
+          .eq('agency_id', agencyId)
+          .eq('property_id', propertyId)
+          .eq('storage_path', objectPath)
+          .maybeSingle();
+        const action = propertyMediaInsertFailureAction({
+          rowFound: Boolean(existingMedia),
+          verificationFailed: Boolean(verificationError),
+          insertErrorCode: (mediaError as { code?: unknown }).code,
+        });
+
+        if (action === 'registered') return objectPath;
+        if (action === 'preserve-for-review') {
+          const verificationMessage = verificationError
+            ? ` Vérification impossible : ${getSupabaseErrorMessage(verificationError, 'vérifier la fiche de la photo')}`
+            : ' La réponse de l’insertion est ambiguë; la fiche n’a pas pu être confirmée.';
+          throw new Error(
+            `${registrationMessage}${verificationMessage} Le fichier est conservé pour éviter de supprimer une photo peut-être enregistrée. ` +
+              `Chemin à vérifier : ${objectPath}.`,
+          );
+        }
+
+        const { error: cleanupError } = await storage.remove([objectPath]);
+        if (cleanupError) {
+          throw new Error(
+            `${registrationMessage} Le fichier temporaire n’a pas pu être supprimé. ` +
+              `Un administrateur devra vérifier le chemin ${objectPath}. ` +
+              getSupabaseErrorMessage(cleanupError, 'supprimer le fichier temporaire'),
+          );
+        }
+        throw mediaError;
+      }
+
+      return objectPath;
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({
@@ -237,21 +266,69 @@ export function useDeletePropertyMedia(
       if (!agencyId || !propertyId) throw new Error('Aucune agence ni aucun bien actif n’est sélectionné.');
       if (!canDelete) throw new Error('Seuls les administrateurs et propriétaires peuvent supprimer une photo.');
 
-      const { error: storageError } = await getSupabaseClient()
-        .storage.from(PROPERTY_IMAGES_BUCKET)
-        .remove([media.storage_path]);
-      if (storageError) throw storageError;
-
-      const { error } = await db()
+      const { data: deletedMedia, error: metadataError } = await db()
         .from('property_media')
         .delete()
         .eq('id', media.id)
         .eq('agency_id', agencyId)
-        .eq('property_id', propertyId);
-      if (error) throw error;
+        .eq('property_id', propertyId)
+        .select('id')
+        .maybeSingle();
+
+      // Retirer d'abord la référence SQL. La suppression Storage est un système
+      // séparé; une erreur de vérification conserve le blob au lieu de risquer
+      // d'effacer un fichier encore référencé.
+      const { data: linkedMedia, error: verificationError } = await db()
+        .from('property_media')
+        .select('id')
+        .eq('storage_path', media.storage_path);
+      const deleteAction = propertyMediaDeleteStorageAction({
+        targetMediaId: media.id,
+        linkedMediaIds: linkedMedia?.map((row) => row.id) ?? [],
+        verificationFailed: Boolean(verificationError),
+      });
+
+      if (deleteAction === 'preserve-for-review') {
+        const verificationMessage = verificationError
+          ? getSupabaseErrorMessage(verificationError, 'vérifier les références de la photo')
+          : 'Les références de la photo n’ont pas pu être vérifiées.';
+        throw new Error(
+          `La fiche a peut-être été retirée, mais le fichier Storage est conservé jusqu’à vérification. ${verificationMessage}`,
+        );
+      }
+      if (deleteAction === 'preserve-linked-metadata') {
+        const deletionMessage = metadataError
+          ? getSupabaseErrorMessage(metadataError, 'supprimer la fiche de la photo')
+          : 'La suppression de la fiche n’a pas été confirmée.';
+        throw new Error(
+          `La fiche média existe encore; le fichier Storage n’a pas été touché. ${deletionMessage}`,
+        );
+      }
+      if (deleteAction === 'keep-referenced-object') {
+        if (metadataError && !deletedMedia) {
+          throw new Error(
+            `La suppression de la fiche n’a pas été confirmée; le fichier est conservé car une autre fiche le référence. ${getSupabaseErrorMessage(metadataError, 'supprimer la fiche de la photo')}`,
+          );
+        }
+        return media.id;
+      }
+
+      const { error: storageError } = await getSupabaseClient()
+        .storage.from(PROPERTY_IMAGES_BUCKET)
+        .remove([media.storage_path]);
+      if (storageError) {
+        throw new Error(
+          `La fiche a été retirée, mais le fichier Storage reste à nettoyer (${media.storage_path}). ${getSupabaseErrorMessage(storageError, 'supprimer le fichier photo')}`,
+        );
+      }
       return media.id;
     },
     onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: getPropertyMediaQueryKey(agencyId, propertyId),
+      });
+    },
+    onError: async () => {
       await queryClient.invalidateQueries({
         queryKey: getPropertyMediaQueryKey(agencyId, propertyId),
       });
