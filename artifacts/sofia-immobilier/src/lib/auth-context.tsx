@@ -9,7 +9,17 @@ import {
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Session, User } from '@supabase/supabase-js';
-import { getSupabaseClient, getSupabaseErrorMessage, supabaseConfigured } from './supabase';
+import { getSupabaseClient, supabaseConfigured } from './supabase';
+import {
+  runSignupFlow,
+  verifySessionBeforeRedirect,
+  type SignupCredentials,
+  type SignupOutcome,
+  type SessionVerification,
+} from './auth-flow.js';
+import { AUTH_PHASES, diagnoseAuthError, toAuthFlowError } from './auth-diagnostics.js';
+
+export type { SignupOutcome, SessionVerification };
 
 interface AuthContextValue {
   user: User | null;
@@ -18,6 +28,8 @@ interface AuthContextValue {
   configurationError: string | null;
   initializationError: string | null;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, profile?: { fullName?: string }) => Promise<SignupOutcome>;
+  verifySessionReady: () => Promise<SessionVerification>;
   signOut: () => Promise<void>;
 }
 
@@ -42,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       supabase = getSupabaseClient();
     } catch (error) {
-      setInitializationError(getSupabaseErrorMessage(error, 'initialiser la connexion'));
+      setInitializationError(diagnoseAuthError(error, AUTH_PHASES.SESSION_RESTORE).userMessage);
       setLoading(false);
       return undefined;
     }
@@ -64,7 +76,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void supabase.auth.getSession().then(({ data, error }) => {
       if (!mounted) return;
       if (error) {
-        setInitializationError(getSupabaseErrorMessage(error, 'charger la session'));
+        // Session recovery problems are diagnosed apart from signup failures.
+        setInitializationError(diagnoseAuthError(error, AUTH_PHASES.SESSION_RESTORE).userMessage);
       } else {
         const nextUserId = data.session?.user.id ?? null;
         if (previousUserId.current !== nextUserId) {
@@ -82,14 +95,70 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [queryClient]);
 
+  const verifySessionReady = useCallback(async (): Promise<SessionVerification> => {
+    let result;
+    try {
+      result = await getSupabaseClient().auth.getSession();
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'session-recovery-failed',
+        diagnostic: diagnoseAuthError(error, AUTH_PHASES.SESSION_RESTORE),
+      };
+    }
+
+    const verification = verifySessionBeforeRedirect(result);
+    if (!verification.ok) return verification;
+
+    // Align React state with the verified session before any redirect happens.
+    setSession(result.data.session ?? null);
+    return verification;
+  }, []);
+
+  const signUp = useCallback(
+    async (email: string, password: string, profile?: { fullName?: string }): Promise<SignupOutcome> => {
+      const credentials: SignupCredentials = {
+        email,
+        password,
+        ...(profile?.fullName ? { fullName: profile.fullName } : {}),
+      };
+
+      return runSignupFlow(
+        {
+          signUp: async (input) => {
+            const { data, error } = await getSupabaseClient().auth.signUp({
+              email: input.email,
+              password: input.password,
+              options: {
+                data: input.fullName ? { full_name: input.fullName } : {},
+              },
+            });
+            return { data, error };
+          },
+          verifySession: verifySessionReady,
+        },
+        credentials,
+      );
+    },
+    [verifySessionReady],
+  );
+
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    try {
+      const { error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } catch (error) {
+      throw toAuthFlowError(error, AUTH_PHASES.SIGNIN);
+    }
   }, []);
 
   const signOut = useCallback(async () => {
-    const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
-    if (error) throw error;
+    try {
+      const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
+      if (error) throw error;
+    } catch (error) {
+      throw toAuthFlowError(error, AUTH_PHASES.SIGNOUT);
+    }
     queryClient.clear();
     setSession(null);
   }, [queryClient]);
@@ -103,6 +172,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : 'La configuration Supabase manque. Les données de l’agence ne peuvent pas être chargées.',
     initializationError,
     signIn,
+    signUp,
+    verifySessionReady,
     signOut,
   };
 

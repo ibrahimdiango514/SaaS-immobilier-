@@ -31,6 +31,7 @@ import {
 } from '@/lib/data-hooks';
 import type { AgencyMemberRow, PropertyRow, ContactRow, ContactStatus, SalesPipelineRow } from '@/lib/database.types';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
+import { AuthFlowError, diagnoseAuthError } from '@/lib/auth-diagnostics.js';
 import { contactFormSchema, type ContactFormValues } from '@/lib/contact-schema.js';
 import { pipelineFormSchema, type PipelineFormValues } from '@/lib/pipeline-schema.js';
 import {
@@ -1084,7 +1085,7 @@ function Login() {
     try {
       await signIn(values.email, values.password);
     } catch (e) {
-      setError(getSupabaseErrorMessage(e, 'ouvrir une session'));
+      setError(e instanceof AuthFlowError ? e.diagnostic.userMessage : getSupabaseErrorMessage(e, 'ouvrir une session'));
     } finally {
       setBusy(false);
     }
@@ -1094,12 +1095,74 @@ function Login() {
     <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="agent@example.test" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />
     <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type="password" autoComplete="current-password" placeholder="Votre mot de passe" data-testid="input-login-password" /></FormControl></div><FormMessage /></FormItem>} />
     {(error || configurationError || initializationError) && <p className="form-error" role="alert" data-testid="status-login-error">{error || configurationError || initializationError}</p>}<Button type="submit" className="login-submit" disabled={busy || !!configurationError || !!initializationError} data-testid="button-login-submit">{busy ? 'Connexion…' : 'Se connecter'} <ArrowRight size={15} /></Button>
-  </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Les nouvelles inscriptions sont gérées par l’administrateur de votre agence.</div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
+  </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Nouveau dans l’espace ? <Link href="/inscription" className="text-action" data-testid="link-login-signup">Créer un compte</Link> — l’accès aux données d’une agence reste soumis à votre adhésion.</div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
+}
+
+const signupSchema = z.object({
+  full_name: z.string().trim().optional(),
+  email: z.string().trim().email('Adresse e-mail invalide'),
+  password: z.string().min(6, 'Le mot de passe doit contenir au moins 6 caractères'),
+});
+type SignupFormValues = z.infer<typeof signupSchema>;
+
+function Signup() {
+  const { user, signUp, verifySessionReady, configurationError, initializationError } = useAuth();
+  const [, navigate] = useLocation();
+  const form = useForm<SignupFormValues>({
+    resolver: zodResolver(signupSchema),
+    defaultValues: { full_name: '', email: '', password: '' },
+  });
+  const [diagnostic, setDiagnostic] = useState<{ code: string; phase: string; userMessage: string } | null>(null);
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (values: SignupFormValues) => {
+    setDiagnostic(null);
+    setBusy(true);
+    try {
+      const outcome = await signUp(
+        values.email,
+        values.password,
+        values.full_name ? { fullName: values.full_name } : undefined,
+      );
+      if (outcome.status === 'email-confirmation-required') {
+        // signUp() returned a user without a session: no redirect before a session exists.
+        setPendingEmail(values.email);
+        return;
+      }
+      if (outcome.status === 'session-active' && outcome.readyToRedirect) {
+        // The session returned by signUp() is restored: verify it once more before redirecting.
+        const check = await verifySessionReady();
+        if (!check.ok) {
+          setDiagnostic({ code: check.diagnostic.code, phase: check.diagnostic.phase, userMessage: check.diagnostic.userMessage });
+          return;
+        }
+        navigate('/');
+        return;
+      }
+      setDiagnostic({ code: 'incomplete', phase: 'signup', userMessage: 'L’inscription n’a retourné ni session ni confirmation. Réessayez ou contactez l’administrateur de votre espace.' });
+    } catch (e) {
+      const d = e instanceof AuthFlowError ? e.diagnostic : diagnoseAuthError(e, 'signup');
+      setDiagnostic({ code: d.code, phase: d.phase, userMessage: d.userMessage });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (user) return <div className="auth-loading"><div className="state-card"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Session déjà ouverte</h2><p>Votre compte est déjà connecté à Sofia Immobilier.</p><Link href="/" className="text-action" data-testid="link-continue-workspace">Continuer vers l’espace agence <ArrowRight size={14} /></Link></div></div>;
+  if (pendingEmail) return <div className="auth-loading"><div className="state-card" data-testid="card-signup-confirmation"><div className="state-icon"><Mail size={19} /></div><h2>Confirmez votre adresse e-mail</h2><p>Un lien de confirmation a été envoyé à <strong data-testid="text-signup-pending-email">{pendingEmail}</strong>. Aucune session n’est ouverte tant que cette étape n’est pas terminée.</p><Link href="/login" className="text-action" data-testid="link-signup-back-login">Revenir à la connexion <ArrowRight size={14} /></Link></div></div>;
+  return <div className="login-page"><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-signup-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Créez votre accès professionnel, puis rejoignez l’agence qui vous a invité à travailler avec elle.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Première connexion</span><h2>Créer un compte</h2><p>Renseignez votre identité professionnelle pour ouvrir votre accès.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
+    <FormField control={form.control} name="full_name" render={({ field }) => <FormItem><FormLabel>Nom complet</FormLabel><div className="login-input-wrap"><UserRound size={15} aria-hidden="true" /><FormControl><Input {...field} autoComplete="name" placeholder="Aminata Traoré" data-testid="input-signup-name" /></FormControl></div><FormMessage /></FormItem>} />
+    <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="agent@example.test" data-testid="input-signup-email" /></FormControl></div><FormMessage /></FormItem>} />
+    <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type="password" autoComplete="new-password" placeholder="6 caractères minimum" data-testid="input-signup-password" /></FormControl></div><FormMessage /></FormItem>} />
+    {(diagnostic || configurationError || initializationError) && <p className="form-error" role="alert" data-testid="status-signup-error" data-diagnostic-code={diagnostic?.code} data-diagnostic-phase={diagnostic?.phase}>{diagnostic?.userMessage || configurationError || initializationError}</p>}<Button type="submit" className="login-submit" disabled={busy || !!configurationError || !!initializationError} data-testid="button-signup-submit">{busy ? 'Création du compte…' : 'Créer mon compte'} <ArrowRight size={15} /></Button>
+  </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Vous avez déjà un compte ? <Link href="/login" className="text-action" data-testid="link-signup-login">Se connecter</Link> — l’accès aux données d’une agence reste soumis à votre adhésion.</div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
 }
 
 function RoutedContent() {
   const [path] = useLocation();
   if (path === '/login') return <Login />;
+  if (path === '/inscription') return <Signup />;
   return <WorkspaceGate><ErrorBoundary resetKey={path}><Switch><Route path="/" component={Overview} /><Route path="/biens" component={PropertiesPage} /><Route path="/biens/:id" component={PropertyDetailPage} /><Route path="/contacts" component={ContactsPage} /><Route path="/contacts/:id" component={ContactDetailPage} /><Route path="/pipeline" component={PipelinePage} /><Route path="/visites" component={VisitsPage} /><Route path="/agence" component={AgencyPage} /><Route path="/profil" component={ProfilePage} /><Route path="/parametres" component={SettingsPage} /><Route path="/whatsapp" component={ComingSoonPage} /><Route path="/assistant-ia" component={ComingSoonPage} /><Route path="/automatisations" component={ComingSoonPage} /><Route component={NotFound} /></Switch></ErrorBoundary></WorkspaceGate>;
 }
 function App() {
