@@ -18,6 +18,7 @@ export type PropertyStatus =
   | 'draft'
   | 'archived';
 export type ContactStatus = 'lead' | 'prospect' | 'client' | 'inactive';
+export type PlatformProfileRole = 'admin' | 'agency';
 
 export interface AgencyRow {
   id: string;
@@ -32,6 +33,8 @@ export interface AgencyRow {
   timezone: string;
   currency: string;
   status: string;
+  logo_url: string | null;
+  description: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +54,17 @@ export interface UserProfileRow {
   full_name: string | null;
   phone: string | null;
   avatar_url: string | null;
+  email: string | null;
+  role: PlatformProfileRole;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformAdminRow {
+  id: string;
+  user_id: string;
+  role: string;
+  status: string;
   created_at: string;
   updated_at: string;
 }
@@ -124,6 +138,143 @@ export interface SalesPipelineRow {
   updated_at: string;
 }
 
+export interface PropertyVisitRow {
+  id: string;
+  agency_id: string;
+  appointment_id: string | null;
+  contact_id: string;
+  property_id: string;
+  agent_user_id: string | null;
+  status: string;
+  feedback: string | null;
+  visited_at: string | null;
+  notes: string | null;
+  visit_type: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationRow {
+  id: string;
+  agency_id: string;
+  contact_id: string;
+  whatsapp_connection_id: string | null;
+  status: string;
+  mode: string;
+  assigned_user_id: string | null;
+  last_message_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessageRow {
+  id: string;
+  agency_id: string;
+  conversation_id: string;
+  sender_type: string;
+  sender_user_id: string | null;
+  message_type: string;
+  content: string | null;
+  provider_message_id: string | null;
+  metadata: Json;
+  created_at: string;
+}
+
+export interface FollowUpRow {
+  id: string;
+  agency_id: string;
+  contact_id: string;
+  assigned_user_id: string | null;
+  conversation_id: string | null;
+  type: string;
+  scheduled_at: string;
+  completed_at: string | null;
+  status: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WhatsAppConnectionRow {
+  id: string;
+  agency_id: string;
+  provider: string;
+  connection_name: string;
+  phone_number: string | null;
+  phone_number_id: string | null;
+  instance_id: string | null;
+  status: string;
+  credentials_ref: string | null;
+  config: Json;
+  last_connected_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationRow {
+  id: string;
+  agency_id: string;
+  user_id: string | null;
+  type: string;
+  title: string;
+  message: string;
+  data: Json;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface PlanRow {
+  id: string;
+  name: string;
+  description: string | null;
+  price_monthly: number;
+  currency: string;
+  max_members: number;
+  max_properties: number;
+  max_whatsapp_connections: number;
+  monthly_ai_tokens: number;
+  monthly_conversations: number;
+  features: Json;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgencySubscriptionRow {
+  id: string;
+  agency_id: string;
+  plan_id: string;
+  status: string;
+  starts_at: string;
+  ends_at: string | null;
+  trial_ends_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActivityLogRow {
+  id: string;
+  agency_id: string | null;
+  user_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  summary: string;
+  metadata: Json;
+  created_at: string;
+}
+
+export interface UsageEventRow {
+  id: string;
+  agency_id: string;
+  user_id: string | null;
+  event_type: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  metadata: Json;
+  event_key: string;
+  created_at: string;
+}
+
 type TableDefinition<Row, Insert = Partial<Row>, Update = Partial<Row>> = {
   Row: Row;
   Insert: Insert;
@@ -144,13 +295,41 @@ export interface Database {
       agencies: TableDefinition<AgencyRow>;
       agency_members: TableDefinition<AgencyMemberRow>;
       user_profiles: TableDefinition<UserProfileRow>;
+      platform_admins: TableDefinition<PlatformAdminRow>;
       properties: TableDefinition<PropertyRow>;
       property_media: TableDefinition<PropertyMediaRow>;
       contacts: TableDefinition<ContactRow>;
       sales_pipeline: TableDefinition<SalesPipelineRow>;
+      property_visits: TableDefinition<PropertyVisitRow>;
+      conversations: TableDefinition<ConversationRow>;
+      conversation_messages: TableDefinition<ConversationMessageRow>;
+      follow_ups: TableDefinition<FollowUpRow>;
+      whatsapp_connections: TableDefinition<WhatsAppConnectionRow>;
+      notifications: TableDefinition<NotificationRow>;
+      plans: TableDefinition<PlanRow>;
+      agency_subscriptions: TableDefinition<AgencySubscriptionRow>;
+      activity_log: TableDefinition<ActivityLogRow>;
+      usage_events: TableDefinition<UsageEventRow>;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      create_agency_for_self: {
+        Args: {
+          p_name: string;
+          p_legal_name?: string | null;
+          p_phone?: string | null;
+          p_email?: string | null;
+          p_address?: string | null;
+          p_city?: string | null;
+          p_country?: string;
+          p_timezone?: string;
+          p_currency?: string;
+          p_description?: string | null;
+          p_logo_url?: string | null;
+        };
+        Returns: AgencyRow;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -9,6 +9,7 @@ import {
   Settings2, ShieldCheck, SlidersHorizontal, UsersRound, X, Pencil, RefreshCw,
   LockKeyhole, Mail, Phone, MapPin, UserRound, KeyRound, LayoutGrid, List,
   Camera, ImagePlus, Trash2, CalendarDays, BarChart3, UserCog, MessageCircle,
+  Bell, CheckCheck, UserPlus,
 } from 'lucide-react';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -26,24 +27,38 @@ import {
   useCreateProperty, useUpdateProperty, useCreateContact, useUpdateContact,
   useCreatePipelineItem, useUpdatePipelineItem, useUpdateAgency, useUpdateCurrentProfile,
   usePropertyMedia, useUploadPropertyMedia, useDeletePropertyMedia,
+  usePlatformRole, useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead,
+  useTrackPropertyView, getPlatformRole,
   type PropertyCreateInput, type ContactCreateInput, type PipelineCreateInput,
   type AgencySettingsInput, type ProfileUpdateInput,
 } from '@/lib/data-hooks';
 import type { AgencyMemberRow, PropertyRow, ContactRow, SalesPipelineRow } from '@/lib/database.types';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import NotFound from '@/pages/not-found';
+import VisitsPage from '@/pages/visits';
+import WhatsAppPage from '@/pages/whatsapp';
+import AssistantPage from '@/pages/assistant';
+import AutomationsPage from '@/pages/automations';
+import SignupPage from '@/pages/signup';
+import OnboardingPage from '@/pages/onboarding';
+import AdminShell from '@/pages/admin/admin-shell';
+import AdminOverviewPage from '@/pages/admin/overview';
+import AdminAgenciesPage from '@/pages/admin/agencies';
+import AdminPropertiesPage from '@/pages/admin/properties';
+import AdminActivityPage from '@/pages/admin/activity';
+import AdminSubscriptionsPage from '@/pages/admin/subscriptions';
 
 const queryClient = new QueryClient();
 
 const nav = [
-  { href: '/', label: 'Vue d’ensemble', icon: LayoutDashboard },
+  { href: '/dashboard', label: 'Vue d’ensemble', icon: LayoutDashboard },
   { href: '/biens', label: 'Biens immobiliers', icon: Home },
   { href: '/contacts', label: 'Prospects et contacts', icon: ContactRound },
   { href: '/pipeline', label: 'Pipeline commercial', icon: SlidersHorizontal },
-  { href: '/visites', label: 'Visites', icon: CalendarDays, soon: true },
-  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, soon: true },
-  { href: '/assistant-ia', label: 'Assistant IA', icon: CircleHelp, soon: true },
-  { href: '/automatisations', label: 'Automatisations', icon: RefreshCw, soon: true },
+  { href: '/visites', label: 'Visites', icon: CalendarDays },
+  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle },
+  { href: '/assistant-ia', label: 'Assistant IA', icon: CircleHelp },
+  { href: '/automatisations', label: 'Automatisations', icon: RefreshCw },
   { href: '/agence', label: 'Agence et membres', icon: UsersRound },
   { href: '/profil', label: 'Mon profil', icon: UserRound },
   { href: '/parametres', label: 'Paramètres', icon: Settings2 },
@@ -59,11 +74,16 @@ function BrandMark() { return <div className="brand-mark" aria-hidden="true"><Bu
 function AppShell({ children }: { children: ReactNode }) {
   const [path] = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [notice, setNotice] = useState(false);
+  const [notice, setNotice] = useState('');
   const [signOutError, setSignOutError] = useState('');
+  const [notifOpen, setNotifOpen] = useState(false);
   const { user, signOut } = useAuth();
   const { agencies, activeAgency, activeAgencyId, setActiveAgencyId, activeMembership } = useAgency();
   const { data: profile } = useCurrentProfile(user?.id);
+  const notificationsQ = useNotifications(activeAgencyId);
+  const markRead = useMarkNotificationRead(activeAgencyId);
+  const markAllRead = useMarkAllNotificationsRead(activeAgencyId);
+  const unreadCount = (notificationsQ.data ?? []).filter((item) => !item.read_at).length;
   const name = profile?.full_name || user?.email || 'Mon compte';
   const currentLabel = nav.find((item) => item.href === path)?.label ?? (path.startsWith('/biens/') ? 'Fiche bien' : path.startsWith('/contacts/') ? 'Fiche contact' : 'Espace de travail');
   const handleSignOut = async () => {
@@ -72,15 +92,15 @@ function AppShell({ children }: { children: ReactNode }) {
       await signOut();
     } catch (error) {
       setSignOutError(getSupabaseErrorMessage(error, 'fermer la session'));
-      setNotice(true);
+      setNotice('error');
     }
   };
   return <div className="app-shell">
     <div className={`mobile-overlay${menuOpen ? ' is-open' : ''}`} onClick={() => setMenuOpen(false)} data-testid="mobile-navigation-overlay" />
     <aside className={`sidebar${menuOpen ? ' is-open' : ''}`} aria-label="Navigation principale">
-      <Link href="/" className="brand-lockup" data-testid="link-brand-home" onClick={() => setMenuOpen(false)}><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link>
+      <Link href="/dashboard" className="brand-lockup" data-testid="link-brand-home" onClick={() => setMenuOpen(false)}><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link>
       <div className="nav-label">Espace de travail</div>
-      <nav className="nav-list" aria-label="Navigation principale">{nav.map(({ href, label, icon: Icon, soon }) => <Link href={href} key={href} className={`nav-link${soon ? ' nav-link-soon' : ''}`} aria-current={path === href ? 'page' : undefined} data-testid={`link-nav-${href === '/' ? 'overview' : href.slice(1)}`} onClick={() => setMenuOpen(false)}><Icon size={16} /><span>{label}</span>{soon && <small>Bientôt</small>}</Link>)}</nav>
+      <nav className="nav-list" aria-label="Navigation principale">{nav.map(({ href, label, icon: Icon }) => <Link href={href} key={href} className={`nav-link${path === href ? ' is-active' : ''}`} aria-current={path === href ? 'page' : undefined} data-testid={`link-nav-${href === '/dashboard' ? 'overview' : href.slice(1)}`} onClick={() => setMenuOpen(false)}><Icon size={16} /><span>{label}</span></Link>)}</nav>
       <div className="sidebar-spacer" />
       <div className="connection-card" data-testid="status-data-access"><div className="connection-heading"><i /> Espace sécurisé</div><p>Vos données sont limitées aux agences auxquelles vous avez accès.</p></div>
       <label className="agency-select-label" htmlFor="agency-switcher">Agence active</label>
@@ -92,11 +112,36 @@ function AppShell({ children }: { children: ReactNode }) {
       <button className="sidebar-signout" onClick={() => void handleSignOut()} data-testid="button-sign-out"><LogOut size={14} /> Se déconnecter</button>
     </aside>
     <div className="main-column">
-      <header className="topbar"><div className="breadcrumb"><span>{activeAgency?.name ?? 'Espace agence'}</span><ArrowRight size={12} /><strong>{currentLabel}</strong></div><div className="topbar-tools"><Link href="/profil" className="profile-chip" data-testid="display-user-access-status"><div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div><span>{name}</span></Link><button type="button" className="icon-button" onClick={() => setNotice(true)} aria-label="Notifications bientôt disponibles" title="Notifications · Bientôt disponible" data-testid="button-notifications"><CircleHelp size={15} /></button></div></header>
+      <header className="topbar"><div className="breadcrumb"><span>{activeAgency?.name ?? 'Espace agence'}</span><ArrowRight size={12} /><strong>{currentLabel}</strong></div><div className="topbar-tools"><Link href="/profil" className="profile-chip" data-testid="display-user-access-status"><div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div><span>{name}</span></Link>
+        <div className="notif-wrap">
+          <button type="button" className="icon-button notif-button" onClick={() => setNotifOpen((v) => !v)} aria-label="Notifications" title="Notifications" aria-expanded={notifOpen} data-testid="button-notifications">
+            <Bell size={15} />
+            {unreadCount > 0 && <span className="notif-badge" data-testid="count-unread-notifications">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+          </button>
+          {notifOpen && <div className="notif-panel" role="dialog" aria-label="Notifications" data-testid="panel-notifications">
+            <div className="notif-panel-head">
+              <strong>Notifications</strong>
+              {unreadCount > 0 && <button type="button" className="text-action" onClick={() => markAllRead.mutate()} disabled={markAllRead.isPending} data-testid="button-mark-all-read"><CheckCheck size={13} /> Tout lire</button>}
+            </div>
+            {notificationsQ.isLoading ? <div className="notif-empty">Chargement…</div> : notificationsQ.error ? <div className="notif-empty">Impossible de charger les notifications.</div> : (notificationsQ.data ?? []).length ? (
+              <div className="notif-list">
+                {notificationsQ.data!.map((item) => (
+                  <button type="button" key={item.id} className={`notif-item${item.read_at ? '' : ' is-unread'}`} onClick={() => { if (!item.read_at) markRead.mutate(item.id); }} data-testid={`row-notification-${item.id}`}>
+                    <strong>{item.title}</strong>
+                    <span>{item.message}</span>
+                    <small>{dateLabel(item.created_at)}</small>
+                  </button>
+                ))}
+              </div>
+            ) : <div className="notif-empty">Aucune notification pour l’instant.</div>}
+            <button type="button" className="notif-close" onClick={() => setNotifOpen(false)}>Fermer</button>
+          </div>}
+        </div>
+      </div></header>
       <header className="mobile-header"><div className="mobile-brand"><BrandMark /><strong>sofia immobilier</strong></div><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">{children}</main>
     </div>
-    {notice && <div className="notice-toast" role={signOutError ? 'alert' : 'status'} data-testid="status-notifications">{signOutError || 'Notifications : bientôt disponible. Aucun compteur ni alerte fictive.'}<button onClick={() => setNotice(false)} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
+    {notice && <div className="notice-toast" role={signOutError ? 'alert' : 'status'} data-testid="status-notifications">{signOutError || 'Action effectuée.'}<button onClick={() => setNotice('')} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
   </div>;
 }
 
@@ -115,16 +160,29 @@ function LoadingRows({ label = 'Chargement des données' }: { label?: string }) 
 function NoAgency({ isLoading, error, retry }: { isLoading: boolean; error: Error | null; retry: () => void }) {
   if (isLoading) return <LoadingRows label="Vérification des accès agence" />;
   if (error) return <ErrorState error={error} retry={retry} testId="status-membership-error" />;
-  return <div className="state-card" data-testid="empty-membership"><div className="state-icon"><LockKeyhole size={19} /></div><span className="state-kicker">Accès requis</span><h2>Aucune agence active associée</h2><p>Ce compte ne possède pas encore d’adhésion active à une agence. Demandez à un administrateur de vérifier vos accès.</p></div>;
+  return <div className="state-card" data-testid="empty-membership"><div className="state-icon"><LockKeyhole size={19} /></div><span className="state-kicker">Accès requis</span><h2>Aucune agence active associée</h2><p>Créez votre propre agence en quelques étapes, ou demandez à un administrateur de vous donner accès à une agence existante.</p><div className="heading-actions" style={{ justifyContent: 'center' }}><Link href="/onboarding" className="button-link" data-testid="link-create-agency"><UserPlus size={15} /> Créer mon agence</Link><button className="button-link" onClick={retry}><RefreshCw size={14} /> Réessayer</button></div></div>;
 }
 function useSafeRetry(query: { refetch: () => unknown }) { return () => { void query.refetch(); }; }
+function Redirect({ to }: { to: string }) {
+  const [, navigate] = useLocation();
+  const redirected = useRef(false);
+  useEffect(() => {
+    if (redirected.current) return;
+    redirected.current = true;
+    navigate(to, { replace: true });
+  }, [to, navigate]);
+  return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Redirection…" /></div>;
+}
 function WorkspaceGate({ children }: { children: ReactNode }) {
   const { user, loading, configurationError, initializationError } = useAuth();
   const agency = useAgency();
   const client = useQueryClient();
-  if (loading) return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Chargement de la session" /></div>;
+  const roleQ = usePlatformRole(user?.id);
+  if (loading || (user && roleQ.isLoading)) return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Chargement de la session" /></div>;
   if (configurationError || initializationError) return <div className="auth-loading"><div className="state-card error-state"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Connexion indisponible</h2><p>{configurationError || initializationError}</p></div></div>;
   if (!user) return <Login />;
+  // Un administrateur plateforme sans adhésion agence est renvoyé vers la console d'administration.
+  if (roleQ.data?.isAdmin && !agency.loading && !agency.error && agency.memberships.length === 0) return <Redirect to="/admin" />;
   if (agency.loading || agency.error || !agency.activeAgencyId) return <AppShell><NoAgency isLoading={agency.loading || (agency.memberships.length > 0 && !agency.activeAgencyId)} error={agency.error} retry={() => { void client.invalidateQueries({ queryKey: ['sofia', 'memberships'] }); void client.invalidateQueries({ queryKey: ['sofia', 'agencies'] }); }} /></AppShell>;
   return <AppShell>{children}</AppShell>;
 }
@@ -307,9 +365,17 @@ function PropertyDetailPage() {
   const upload = useUploadPropertyMedia(activeAgencyId, id);
   const canDelete = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
   const removeMedia = useDeletePropertyMedia(activeAgencyId, id, canDelete);
+  const trackView = useTrackPropertyView(activeAgencyId, id);
   const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState(false);
   const [activeImage, setActiveImage] = useState<string | null>(null);
+  const trackedPropertyId = useRef<string | null>(null);
+  useEffect(() => {
+    if (item && trackedPropertyId.current !== item.id) {
+      trackedPropertyId.current = item.id;
+      trackView.mutate();
+    }
+  }, [item, trackView]);
   if (propertiesQ.isLoading) return <><Heading eyebrow="Portefeuille" title="Fiche du bien" description="Chargement du dossier immobilier."/><LoadingRows/></>;
   if (propertiesQ.error) return <><Heading eyebrow="Portefeuille" title="Fiche du bien" description="Les informations du dossier ne sont pas disponibles."/><ErrorState error={propertiesQ.error} retry={useSafeRetry(propertiesQ)}/></>;
   if (!item) return <><Heading eyebrow="Portefeuille" title="Bien introuvable" description="Ce dossier n’est pas présent dans le portefeuille de l’agence active."/><Link href="/biens" className="text-action">Retour aux biens <ArrowRight size={13}/></Link></>;
@@ -358,29 +424,24 @@ function ProfilePage() {
   return <><Heading eyebrow="Compte personnel" title="Mon profil" description="Ces informations sont strictement celles de votre compte connecté."/><section className="panel settings-panel profile-page-panel"><div className="settings-heading"><div className="settings-icon"><UserCog size={17}/></div><div><h2>Vos informations</h2><p>Seul votre propre profil est consulté et modifiable ici.</p></div></div><Form {...form}><form className="settings-form" onSubmit={form.handleSubmit(save)}><div className="settings-readonly"><Mail size={15}/><div><span>Adresse e-mail du compte</span><strong>{user?.email || '—'}</strong></div><small>Lecture seule</small></div><FormField control={form.control} name="full_name" render={({field})=><FormItem><FormLabel>Nom affiché</FormLabel><FormControl><Input {...field} data-testid="input-profile-page-name"/></FormControl><FormMessage/></FormItem>}/><FormField control={form.control} name="phone" render={({field})=><FormItem><FormLabel>Téléphone</FormLabel><FormControl><Input {...field} data-testid="input-profile-page-phone"/></FormControl><FormMessage/></FormItem>}/><div className="form-actions">{message&&<span className={message.includes('Impossible')?'form-feedback is-error':'form-feedback'} role="status">{message}</span>}<Button type="submit" disabled={update.isPending}>{update.isPending?'Enregistrement…':'Enregistrer mon profil'}</Button></div></form></Form></section></>;
 }
 
-function ComingSoonPage() {
-  const [path] = useLocation(); const entry = nav.find((item)=>item.href===path); const Icon = entry?.icon ?? CircleHelp;
-  return <><Heading eyebrow="Modules Sofia" title={entry?.label ?? 'Module'} description="Ce module n’est pas encore actif dans votre espace."/><section className="route-placeholder soon-module"><div className="placeholder-inner"><div className="placeholder-art"><Icon size={23}/></div><span className="form-kicker">Disponible prochainement</span><h2>Bientôt disponible</h2><p>Cette fonctionnalité n’est pas activée. Aucun rendez-vous, message, automatisation ou résultat fictif n’est affiché.</p><span className="placeholder-state"><i/> Module désactivé</span><p><Link href="/" className="text-action">Retour à la vue d’ensemble <ArrowRight size={13}/></Link></p></div></section></>;
-}
-
-const settingsSchema = z.object({ name: z.string().trim().min(1, 'Le nom est obligatoire'), legal_name: z.string().optional(), phone: z.string().optional(), email: z.string().email('Adresse e-mail invalide').or(z.literal('')).optional(), address: z.string().optional(), city: z.string().optional(), country: z.string().trim().min(1, 'Le pays est obligatoire'), timezone: z.string().trim().min(1, 'Le fuseau horaire est obligatoire'), currency: z.string().trim().min(1, 'La devise est obligatoire') });
+const settingsSchema = z.object({ name: z.string().trim().min(1, 'Le nom est obligatoire'), legal_name: z.string().optional(), phone: z.string().optional(), email: z.string().email('Adresse e-mail invalide').or(z.literal('')).optional(), address: z.string().optional(), city: z.string().optional(), description: z.string().optional(), country: z.string().trim().min(1, 'Le pays est obligatoire'), timezone: z.string().trim().min(1, 'Le fuseau horaire est obligatoire'), currency: z.string().trim().min(1, 'La devise est obligatoire') });
 const profileSchema = z.object({ full_name: z.string().trim().min(1, 'Le nom est obligatoire'), phone: z.string().optional() });
 function SettingsPage() {
   const { user } = useAuth(); const { activeAgency, activeAgencyId, canManageAgency } = useAgency(); const profileQ = useCurrentProfile(user?.id); const updateAgency = useUpdateAgency(activeAgencyId); const updateProfile = useUpdateCurrentProfile(user?.id);
   const profileForm = useForm<z.infer<typeof profileSchema>>({ resolver: zodResolver(profileSchema), defaultValues: { full_name: '', phone: '' } });
-  const agencyForm = useForm<z.infer<typeof settingsSchema>>({ resolver: zodResolver(settingsSchema), defaultValues: { name: '', legal_name: '', phone: '', email: '', address: '', city: '', country: 'Mali', timezone: 'Africa/Bamako', currency: 'XOF' } });
+  const agencyForm = useForm<z.infer<typeof settingsSchema>>({ resolver: zodResolver(settingsSchema), defaultValues: { name: '', legal_name: '', phone: '', email: '', address: '', city: '', description: '', country: 'Mali', timezone: 'Africa/Bamako', currency: 'XOF' } });
   const [profileMessage, setProfileMessage] = useState(''); const [agencyMessage, setAgencyMessage] = useState('');
   useEffect(() => { if (profileQ.data) profileForm.reset({ full_name: profileQ.data.full_name ?? '', phone: profileQ.data.phone ?? '' }); }, [profileQ.data, profileForm]);
-  useEffect(() => { if (activeAgency) agencyForm.reset({ name: activeAgency.name, legal_name: activeAgency.legal_name ?? '', phone: activeAgency.phone ?? '', email: activeAgency.email ?? '', address: activeAgency.address ?? '', city: activeAgency.city ?? '', country: activeAgency.country, timezone: activeAgency.timezone, currency: activeAgency.currency }); }, [activeAgency, agencyForm]);
+  useEffect(() => { if (activeAgency) agencyForm.reset({ name: activeAgency.name, legal_name: activeAgency.legal_name ?? '', phone: activeAgency.phone ?? '', email: activeAgency.email ?? '', address: activeAgency.address ?? '', city: activeAgency.city ?? '', description: activeAgency.description ?? '', country: activeAgency.country, timezone: activeAgency.timezone, currency: activeAgency.currency }); }, [activeAgency, agencyForm]);
   if (profileQ.isLoading) return <><Heading eyebrow="Préférences" title="Paramètres" description="Gérez votre profil et les informations de l’agence." /><LoadingRows /></>;
   if (profileQ.error) return <><Heading eyebrow="Préférences" title="Paramètres" description="Gérez votre profil et les informations de l’agence." /><ErrorState error={profileQ.error} retry={useSafeRetry(profileQ)} /></>;
   const saveProfile = async (v: z.infer<typeof profileSchema>) => { setProfileMessage(''); try { const input: ProfileUpdateInput = { full_name: v.full_name, phone: v.phone || null }; await updateProfile.mutateAsync(input); setProfileMessage('Profil enregistré.'); } catch (e) { setProfileMessage(getSupabaseErrorMessage(e, 'enregistrer le profil')); } };
-  const saveAgency = async (v: z.infer<typeof settingsSchema>) => { setAgencyMessage(''); try { const input: AgencySettingsInput = { name: v.name, legal_name: v.legal_name || null, phone: v.phone || null, email: v.email || null, address: v.address || null, city: v.city || null, country: v.country, timezone: v.timezone, currency: v.currency }; await updateAgency.mutateAsync(input); setAgencyMessage('Informations d’agence enregistrées.'); } catch (e) { setAgencyMessage(getSupabaseErrorMessage(e, 'enregistrer les informations de l’agence')); } };
+  const saveAgency = async (v: z.infer<typeof settingsSchema>) => { setAgencyMessage(''); try { const input: AgencySettingsInput = { name: v.name, legal_name: v.legal_name || null, phone: v.phone || null, email: v.email || null, address: v.address || null, city: v.city || null, description: v.description || null, country: v.country, timezone: v.timezone, currency: v.currency }; await updateAgency.mutateAsync(input); setAgencyMessage('Informations d’agence enregistrées.'); } catch (e) { setAgencyMessage(getSupabaseErrorMessage(e, 'enregistrer les informations de l’agence')); } };
   return <><Heading eyebrow="Préférences" title="Paramètres" description="Votre profil personnel et les coordonnées de l’agence active." />
     <div className="settings-stack"><section className="panel settings-panel"><div className="settings-heading"><div className="settings-icon"><UserRound size={17} /></div><div><h2>Mon profil</h2><p>Ces informations concernent uniquement votre compte.</p></div></div><Form {...profileForm}><form className="settings-form" onSubmit={profileForm.handleSubmit(saveProfile)}><div className="settings-readonly"><Mail size={15} /><div><span>Adresse e-mail de connexion</span><strong data-testid="text-profile-email">{user?.email}</strong></div><small>Non modifiable</small></div><div className="form-grid"><FormField control={profileForm.control} name="full_name" render={({ field }) => <FormItem><FormLabel>Nom affiché</FormLabel><FormControl><Input {...field} data-testid="input-profile-name" /></FormControl><FormMessage /></FormItem>} /><FormField control={profileForm.control} name="phone" render={({ field }) => <FormItem><FormLabel>Téléphone</FormLabel><FormControl><Input {...field} data-testid="input-profile-phone" /></FormControl><FormMessage /></FormItem>} /></div><div className="form-actions">{profileMessage && <span className={`form-feedback${profileMessage.includes('Impossible') || profileMessage.includes('refusé') ? ' is-error' : ''}`} role="status" data-testid="status-profile-save">{profileMessage}</span>}<Button type="submit" disabled={updateProfile.isPending} data-testid="button-save-profile">{updateProfile.isPending ? 'Enregistrement…' : 'Enregistrer mon profil'}</Button></div></form></Form></section>
       <section className="panel settings-panel"><div className="settings-heading"><div className="settings-icon"><Building2 size={17} /></div><div><h2>Informations de l’agence</h2><p>Coordonnées partagées de {activeAgency?.name ?? 'l’agence active'}.</p></div><span className={`permission-badge${canManageAgency ? ' allowed' : ''}`}><KeyRound size={13} /> {canManageAgency ? 'Modification autorisée' : 'Lecture seule'}</span></div>
         {!canManageAgency && <div className="permission-note"><LockKeyhole size={15} /><span>Seuls les propriétaires et administrateurs peuvent modifier ces champs.</span></div>}
-        <Form {...agencyForm}><form className="settings-form" onSubmit={agencyForm.handleSubmit(saveAgency)}><div className="form-grid"><FormField control={agencyForm.control} name="name" render={({ field }) => <FormItem><FormLabel>Nom commercial</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-name" /></FormControl><FormMessage /></FormItem>} /><FormField control={agencyForm.control} name="legal_name" render={({ field }) => <FormItem><FormLabel>Raison sociale</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-legal-name" /></FormControl></FormItem>} /></div><div className="form-grid"><FormField control={agencyForm.control} name="phone" render={({ field }) => <FormItem><FormLabel>Téléphone agence</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-phone" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="email" render={({ field }) => <FormItem><FormLabel>E-mail agence</FormLabel><FormControl><Input type="email" {...field} disabled={!canManageAgency} data-testid="input-agency-email" /></FormControl><FormMessage /></FormItem>} /></div><FormField control={agencyForm.control} name="address" render={({ field }) => <FormItem><FormLabel>Adresse</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-address" /></FormControl></FormItem>} /><div className="form-grid three-col"><FormField control={agencyForm.control} name="city" render={({ field }) => <FormItem><FormLabel>Ville</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-city" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="country" render={({ field }) => <FormItem><FormLabel>Pays</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-country" /></FormControl><FormMessage /></FormItem>} /><FormField control={agencyForm.control} name="currency" render={({ field }) => <FormItem><FormLabel>Devise</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-currency" /></FormControl><FormMessage /></FormItem>} /></div><FormField control={agencyForm.control} name="timezone" render={({ field }) => <FormItem><FormLabel>Fuseau horaire</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-timezone" /></FormControl><FormMessage /></FormItem>} /><div className="form-actions">{agencyMessage && <span className={`form-feedback${agencyMessage.includes('Impossible') || agencyMessage.includes('refusé') ? ' is-error' : ''}`} role="status" data-testid="status-agency-save">{agencyMessage}</span>}{canManageAgency && <Button type="submit" disabled={updateAgency.isPending} data-testid="button-save-agency">{updateAgency.isPending ? 'Enregistrement…' : 'Enregistrer les informations'}</Button>}</div></form></Form>
+        <Form {...agencyForm}><form className="settings-form" onSubmit={agencyForm.handleSubmit(saveAgency)}><div className="form-grid"><FormField control={agencyForm.control} name="name" render={({ field }) => <FormItem><FormLabel>Nom commercial</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-name" /></FormControl><FormMessage /></FormItem>} /><FormField control={agencyForm.control} name="legal_name" render={({ field }) => <FormItem><FormLabel>Raison sociale</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-legal-name" /></FormControl></FormItem>} /></div><div className="form-grid"><FormField control={agencyForm.control} name="phone" render={({ field }) => <FormItem><FormLabel>Téléphone agence</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-phone" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="email" render={({ field }) => <FormItem><FormLabel>E-mail agence</FormLabel><FormControl><Input type="email" {...field} disabled={!canManageAgency} data-testid="input-agency-email" /></FormControl><FormMessage /></FormItem>} /></div><FormField control={agencyForm.control} name="address" render={({ field }) => <FormItem><FormLabel>Adresse</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-address" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="description" render={({ field }) => <FormItem><FormLabel>Description de l’agence</FormLabel><FormControl><Textarea {...field} disabled={!canManageAgency} placeholder="Présentez votre agence…" data-testid="input-agency-description" /></FormControl><FormMessage /></FormItem>} /><div className="form-grid three-col"><FormField control={agencyForm.control} name="city" render={({ field }) => <FormItem><FormLabel>Ville</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-city" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="country" render={({ field }) => <FormItem><FormLabel>Pays</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-country" /></FormControl><FormMessage /></FormItem>} /><FormField control={agencyForm.control} name="currency" render={({ field }) => <FormItem><FormLabel>Devise</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-currency" /></FormControl><FormMessage /></FormItem>} /></div><FormField control={agencyForm.control} name="timezone" render={({ field }) => <FormItem><FormLabel>Fuseau horaire</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-timezone" /></FormControl><FormMessage /></FormItem>} /><div className="form-actions">{agencyMessage && <span className={`form-feedback${agencyMessage.includes('Impossible') || agencyMessage.includes('refusé') ? ' is-error' : ''}`} role="status" data-testid="status-agency-save">{agencyMessage}</span>}{canManageAgency && <Button type="submit" disabled={updateAgency.isPending} data-testid="button-save-agency">{updateAgency.isPending ? 'Enregistrement…' : 'Enregistrer les informations'}</Button>}</div></form></Form>
       </section></div>
   </>;
 }
@@ -393,6 +454,8 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 function Login() {
   const { user, signIn, configurationError, initializationError } = useAuth();
+  const [, navigate] = useLocation();
+  const roleQ = usePlatformRole(user?.id);
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
@@ -403,25 +466,98 @@ function Login() {
     setError('');
     setBusy(true);
     try {
-      await signIn(values.email, values.password);
+      const signedInUser = await signIn(values.email, values.password);
+      if (signedInUser) {
+        // Redirection selon le rôle lu dans Supabase : admin → /admin, agence → /dashboard.
+        try {
+          const role = await getPlatformRole(signedInUser.id);
+          navigate(role.isAdmin ? '/admin' : '/dashboard', { replace: true });
+        } catch {
+          navigate('/dashboard', { replace: true });
+        }
+      }
     } catch (e) {
       setError(getSupabaseErrorMessage(e, 'ouvrir une session'));
     } finally {
       setBusy(false);
     }
   };
-  if (user) return <div className="auth-loading"><div className="state-card"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Session déjà ouverte</h2><p>Votre compte est déjà connecté à Sofia Immobilier.</p><Link href="/" className="text-action" data-testid="link-continue-workspace">Continuer vers l’espace agence <ArrowRight size={14} /></Link></div></div>;
+  if (user) {
+    const destination = roleQ.data?.isAdmin ? '/admin' : '/dashboard';
+    const destinationLabel = roleQ.data?.isAdmin ? 'Continuer vers la console d’administration' : 'Continuer vers l’espace agence';
+    return <div className="auth-loading"><div className="state-card"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Session déjà ouverte</h2><p>Votre compte est déjà connecté à Sofia Immobilier.</p><Link href={destination} className="text-action" data-testid="link-continue-workspace">{destinationLabel} <ArrowRight size={14} /></Link></div></div>;
+  }
   return <div className="login-page"><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
     <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="vous@agence.ml" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />
     <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type="password" autoComplete="current-password" placeholder="Votre mot de passe" data-testid="input-login-password" /></FormControl></div><FormMessage /></FormItem>} />
     {(error || configurationError || initializationError) && <p className="form-error" role="alert" data-testid="status-login-error">{error || configurationError || initializationError}</p>}<Button type="submit" className="login-submit" disabled={busy || !!configurationError || !!initializationError} data-testid="button-login-submit">{busy ? 'Connexion…' : 'Se connecter'} <ArrowRight size={15} /></Button>
-  </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Les nouvelles inscriptions sont gérées par l’administrateur de votre agence.</div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
+  </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Nouvelle agence ? <Link href="/inscription" className="text-action" data-testid="link-signup-from-login">Créer un compte</Link></div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
+}
+
+function AdminGate({ children }: { children: ReactNode }) {
+  const { user, loading, configurationError, initializationError } = useAuth();
+  const roleQ = usePlatformRole(user?.id);
+  if (loading || (user && roleQ.isLoading)) return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Vérification du rôle administrateur" /></div>;
+  if (configurationError || initializationError) return <div className="auth-loading"><div className="state-card error-state"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Connexion indisponible</h2><p>{configurationError || initializationError}</p></div></div>;
+  if (!user) return <Redirect to="/login" />;
+  if (roleQ.error) return <div className="auth-loading"><div className="state-card error-state"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Impossible de vérifier votre rôle</h2><p>{getSupabaseErrorMessage(roleQ.error, 'vérifier votre rôle')}</p><Button variant="outline" onClick={() => void roleQ.refetch()}>Réessayer</Button></div></div>;
+  if (!roleQ.data?.isAdmin) return <Redirect to="/dashboard" />;
+  return <AdminShell><ErrorBoundary resetKey={user.id}>{children}</ErrorBoundary></AdminShell>;
+}
+
+function HomeRedirect() {
+  const { user, loading, configurationError, initializationError } = useAuth();
+  const roleQ = usePlatformRole(user?.id);
+  if (loading || (user && roleQ.isLoading)) return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Ouverture de votre espace" /></div>;
+  if (configurationError || initializationError) return <div className="auth-loading"><div className="state-card error-state"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Connexion indisponible</h2><p>{configurationError || initializationError}</p></div></div>;
+  if (!user) return <Redirect to="/login" />;
+  return <Redirect to={roleQ.data?.isAdmin ? '/admin' : '/dashboard'} />;
+}
+
+function ProfileRoute() {
+  const { user, loading } = useAuth();
+  const roleQ = usePlatformRole(user?.id);
+  if (loading || (user && roleQ.isLoading)) return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Chargement du profil" /></div>;
+  if (!user) return <Redirect to="/login" />;
+  if (roleQ.data?.isAdmin) return <AdminShell><ErrorBoundary resetKey={user.id}><ProfilePage /></ErrorBoundary></AdminShell>;
+  return <WorkspaceGate><ProfilePage /></WorkspaceGate>;
 }
 
 function RoutedContent() {
   const [path] = useLocation();
   if (path === '/login') return <Login />;
-  return <WorkspaceGate><ErrorBoundary resetKey={path}><Switch><Route path="/" component={Overview} /><Route path="/biens" component={PropertiesPage} /><Route path="/biens/:id" component={PropertyDetailPage} /><Route path="/contacts" component={ContactsPage} /><Route path="/contacts/:id" component={ContactDetailPage} /><Route path="/pipeline" component={PipelinePage} /><Route path="/agence" component={AgencyPage} /><Route path="/profil" component={ProfilePage} /><Route path="/parametres" component={SettingsPage} /><Route path="/visites" component={ComingSoonPage} /><Route path="/whatsapp" component={ComingSoonPage} /><Route path="/assistant-ia" component={ComingSoonPage} /><Route path="/automatisations" component={ComingSoonPage} /><Route component={NotFound} /></Switch></ErrorBoundary></WorkspaceGate>;
+  if (path === '/inscription') return <SignupPage />;
+  if (path === '/onboarding') return <OnboardingPage />;
+  if (path === '/profil') return <ProfileRoute />;
+  if (path === '/') return <HomeRedirect />;
+  if (path === '/admin' || path.startsWith('/admin/')) {
+    return <AdminGate>
+      <Switch>
+        <Route path="/admin" component={AdminOverviewPage} />
+        <Route path="/admin/agences" component={AdminAgenciesPage} />
+        <Route path="/admin/biens" component={AdminPropertiesPage} />
+        <Route path="/admin/abonnements" component={AdminSubscriptionsPage} />
+        <Route path="/admin/activite" component={AdminActivityPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </AdminGate>;
+  }
+  return <WorkspaceGate><ErrorBoundary resetKey={path}><Switch>
+    <Route path="/dashboard" component={Overview} />
+    <Route path="/" component={Overview} />
+    <Route path="/biens" component={PropertiesPage} />
+    <Route path="/biens/:id" component={PropertyDetailPage} />
+    <Route path="/contacts" component={ContactsPage} />
+    <Route path="/contacts/:id" component={ContactDetailPage} />
+    <Route path="/pipeline" component={PipelinePage} />
+    <Route path="/visites" component={VisitsPage} />
+    <Route path="/whatsapp" component={WhatsAppPage} />
+    <Route path="/assistant-ia" component={AssistantPage} />
+    <Route path="/automatisations" component={AutomationsPage} />
+    <Route path="/agence" component={AgencyPage} />
+    <Route path="/parametres" component={SettingsPage} />
+    <Route component={NotFound} />
+  </Switch></ErrorBoundary></WorkspaceGate>;
 }
 function App() {
   return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><AuthProvider><AgencyProvider><RoutedContent /></AgencyProvider></AuthProvider></WouterRouter><Toaster /></TooltipProvider></QueryClientProvider>;
