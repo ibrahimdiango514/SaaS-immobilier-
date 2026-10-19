@@ -24,3 +24,9 @@ The Supabase TypeScript type-generation helper returned only the `public` schema
 **Why:** The generated output omitted the custom schema even though its tables exist and are accessible through authenticated REST requests.
 
 **How to apply:** Do not assume default type generation covers `saas_immobilier`; define the custom-schema types explicitly or verify a schema-specific generator option.
+
+The user explicitly authorized schema changes for the 2026-10 correction pass (tables with FKs, strict RLS, journal). Applied on project `xbuuhfwobrafcbgtdgjx`: table `saas_immobilier.activity_log` (RLS: admin select/delete, member select/insert), function `saas_immobilier.log_activity()` (SECURITY DEFINER, never blocks business writes), 11 triggers `activity_log_<table>` on agencies, agency_members, agency_subscriptions, contacts, conversations, follow_ups, properties, property_media, property_visits, sales_pipeline, whatsapp_connections; 49 rows backfilled. The file `artifacts/sofia-immobilier/supabase/migrations/20261019_activity_log.sql` records the applied DDL. All other business tables/RLS were pre-existing and untouched.
+
+**Why:** The correction/feature pass required an activity journal and full CRUD modules; the user authorized schema work in that task.
+
+**How to apply:** Treat `activity_log` as part of the standard schema; real `entity_type` values are table names (e.g. `properties`, `property_visits`), mapped to French labels via `entityLabels` in `workspace-ui.tsx`.

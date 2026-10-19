@@ -1,15 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ActivityLogRow,
   AgencyMemberRow,
   AgencyRow,
+  AgencySubscriptionRow,
   ContactRow,
   ContactStatus,
+  ConversationMessageRow,
+  ConversationRow,
+  FollowUpRow,
+  NotificationRow,
+  PlanRow,
+  PlatformAdminRow,
   PropertyMediaRow,
   PropertyRow,
   PropertyStatus,
   PropertyTransactionType,
+  PropertyVisitRow,
   SalesPipelineRow,
   UserProfileRow,
+  UsageEventRow,
+  WhatsAppConnectionRow,
 } from './database.types';
 import { getSupabaseClient, getSupabaseErrorMessage } from './supabase';
 
@@ -33,6 +44,26 @@ export const getPipelineQueryKey = (agencyId?: string) =>
   ['sofia', 'pipeline', agencyId] as const;
 export const getPropertyMediaQueryKey = (agencyId?: string, propertyId?: string) =>
   ['sofia', 'property-media', agencyId, propertyId] as const;
+export const getVisitsQueryKey = (agencyId?: string) => ['sofia', 'visits', agencyId] as const;
+export const getConversationsQueryKey = (agencyId?: string) =>
+  ['sofia', 'conversations', agencyId] as const;
+export const getConversationMessagesQueryKey = (conversationId?: string) =>
+  ['sofia', 'conversation-messages', conversationId] as const;
+export const getFollowUpsQueryKey = (agencyId?: string) => ['sofia', 'follow-ups', agencyId] as const;
+export const getWhatsAppConnectionsQueryKey = (agencyId?: string) =>
+  ['sofia', 'whatsapp-connections', agencyId] as const;
+export const getNotificationsQueryKey = (agencyId?: string) =>
+  ['sofia', 'notifications', agencyId] as const;
+export const getPlatformRoleQueryKey = (userId?: string) =>
+  ['sofia', 'platform-role', userId] as const;
+export const getPlatformSummaryQueryKey = () => ['sofia', 'platform', 'summary'] as const;
+export const getAllAgenciesQueryKey = () => ['sofia', 'platform', 'agencies'] as const;
+export const getAllPropertiesQueryKey = () => ['sofia', 'platform', 'properties'] as const;
+export const getAllContactsQueryKey = () => ['sofia', 'platform', 'contacts'] as const;
+export const getActivityLogQueryKey = (limit = 100) =>
+  ['sofia', 'platform', 'activity', limit] as const;
+export const getPlansQueryKey = () => ['sofia', 'plans'] as const;
+export const getSubscriptionsQueryKey = () => ['sofia', 'subscriptions'] as const;
 
 export type PropertyCreateInput = Pick<
   PropertyRow,
@@ -89,9 +120,80 @@ export type PipelineUpdateInput = Partial<
 export type AgencySettingsInput = Partial<
   Pick<
     AgencyRow,
-    'name' | 'legal_name' | 'phone' | 'email' | 'address' | 'city' | 'country' | 'timezone' | 'currency'
+    | 'name'
+    | 'legal_name'
+    | 'phone'
+    | 'email'
+    | 'address'
+    | 'city'
+    | 'country'
+    | 'timezone'
+    | 'currency'
+    | 'description'
+    | 'logo_url'
   >
 >;
+
+export type VisitCreateInput = Pick<PropertyVisitRow, 'contact_id' | 'property_id'> &
+  Partial<
+    Pick<PropertyVisitRow, 'status' | 'feedback' | 'visited_at' | 'notes' | 'visit_type' | 'agent_user_id'>
+  >;
+export type VisitUpdateInput = Partial<VisitCreateInput>;
+
+export type ConversationCreateInput = Pick<ConversationRow, 'contact_id'> &
+  Partial<Pick<ConversationRow, 'status' | 'mode' | 'whatsapp_connection_id' | 'assigned_user_id'>>;
+export type ConversationUpdateInput = Partial<ConversationCreateInput>;
+
+export type MessageCreateInput = Pick<ConversationMessageRow, 'conversation_id' | 'content'> & {
+  sender_type?: string;
+  message_type?: string;
+};
+
+export type FollowUpCreateInput = Pick<FollowUpRow, 'contact_id' | 'scheduled_at'> &
+  Partial<Pick<FollowUpRow, 'type' | 'status' | 'notes' | 'assigned_user_id' | 'completed_at'>>;
+export type FollowUpUpdateInput = Partial<FollowUpCreateInput>;
+
+export type WhatsAppConnectionCreateInput = Pick<WhatsAppConnectionRow, 'connection_name'> &
+  Partial<Pick<WhatsAppConnectionRow, 'provider' | 'phone_number' | 'status' | 'credentials_ref' | 'config'>>;
+export type WhatsAppConnectionUpdateInput = Partial<WhatsAppConnectionCreateInput>;
+
+export type OnboardingInput = {
+  name: string;
+  legal_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  city?: string | null;
+  country?: string;
+  timezone?: string;
+  currency?: string;
+  description?: string | null;
+  logo?: File | null;
+};
+
+export type PlatformSummary = {
+  agenciesTotal: number;
+  agenciesActive: number;
+  agenciesSuspended: number;
+  propertiesTotal: number;
+  propertiesAvailable: number;
+  propertiesSold: number;
+  propertiesWithoutPhoto: number;
+  contactsTotal: number;
+  leadsTotal: number;
+  visitsTotal: number;
+  conversationsTotal: number;
+  messagesTotal: number;
+  followUpsPending: number;
+  activeSubscriptions: number;
+  trialSubscriptions: number;
+  expiredSubscriptions: number;
+  inactiveAgencies: number;
+  incompleteProperties: number;
+};
+
+const AGENCY_COLUMNS =
+  'id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, logo_url, description, created_at, updated_at';
 
 export type ProfileUpdateInput = Partial<Pick<UserProfileRow, 'full_name' | 'phone'>>;
 export type PropertyMediaPreview = PropertyMediaRow & {
@@ -286,7 +388,7 @@ export function useAgencies(agencyIds: string[]) {
       if (uniqueIds.length === 0) return [];
       const { data, error } = await db()
         .from('agencies')
-        .select('id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, created_at, updated_at')
+        .select(AGENCY_COLUMNS)
         .in('id', uniqueIds)
         .order('name', { ascending: true });
       if (error) throw error;
@@ -320,7 +422,7 @@ export function useCurrentProfile(userId?: string) {
       if (!userId) return null;
       const { data, error } = await db()
         .from('user_profiles')
-        .select('id, full_name, phone, avatar_url, created_at, updated_at')
+        .select('id, full_name, phone, avatar_url, email, role, created_at, updated_at')
         .eq('id', userId)
         .maybeSingle();
       if (error) throw error;
@@ -606,7 +708,7 @@ export function useUpdateAgency(agencyId?: string) {
         .from('agencies')
         .update(input)
         .eq('id', agencyId)
-        .select('id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, created_at, updated_at')
+        .select(AGENCY_COLUMNS)
         .single();
       if (error) throw error;
       return data;
@@ -634,5 +736,979 @@ export function useUpdateCurrentProfile(userId?: string) {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: getCurrentProfileQueryKey(userId) });
     },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Rôle plateforme (admin)                                             */
+/* ------------------------------------------------------------------ */
+
+export type PlatformRole = {
+  isAdmin: boolean;
+  profile: UserProfileRow | null;
+  platformAdmin: PlatformAdminRow | null;
+};
+
+export async function getPlatformRole(userId?: string): Promise<PlatformRole> {
+  if (!userId) return { isAdmin: false, profile: null, platformAdmin: null };
+  const [profileRes, adminRes] = await Promise.all([
+    db()
+      .from('user_profiles')
+      .select('id, full_name, phone, avatar_url, email, role, created_at, updated_at')
+      .eq('id', userId)
+      .maybeSingle(),
+    db()
+      .from('platform_admins')
+      .select('id, user_id, role, status, created_at, updated_at')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .maybeSingle(),
+  ]);
+  if (profileRes.error) throw profileRes.error;
+  if (adminRes.error) throw adminRes.error;
+  const profile = profileRes.data;
+  const platformAdmin = adminRes.data;
+  return {
+    isAdmin: profile?.role === 'admin' || Boolean(platformAdmin),
+    profile,
+    platformAdmin,
+  };
+}
+
+export function usePlatformRole(userId?: string) {
+  return useQuery({
+    queryKey: getPlatformRoleQueryKey(userId),
+    enabled: Boolean(userId),
+    staleTime: 60_000,
+    queryFn: async (): Promise<PlatformRole> => getPlatformRole(userId),
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Visites                                                             */
+/* ------------------------------------------------------------------ */
+
+export function useVisits(agencyId?: string) {
+  return useQuery({
+    queryKey: getVisitsQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    queryFn: async (): Promise<PropertyVisitRow[]> => {
+      if (!agencyId) return [];
+      const { data, error } = await db()
+        .from('property_visits')
+        .select('id, agency_id, appointment_id, contact_id, property_id, agent_user_id, status, feedback, visited_at, notes, visit_type, created_at, updated_at')
+        .eq('agency_id', agencyId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useCreateVisit(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: VisitCreateInput) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('property_visits')
+        .insert({ ...input, agency_id: agencyId })
+        .select('id, agency_id, appointment_id, contact_id, property_id, agent_user_id, status, feedback, visited_at, notes, visit_type, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getVisitsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateVisit(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: VisitUpdateInput }) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('property_visits')
+        .update(input)
+        .eq('id', id)
+        .eq('agency_id', agencyId)
+        .select('id, agency_id, appointment_id, contact_id, property_id, agent_user_id, status, feedback, visited_at, notes, visit_type, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getVisitsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+      ]);
+    },
+  });
+}
+
+export function useDeleteVisit(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { error } = await db()
+        .from('property_visits')
+        .delete()
+        .eq('id', id)
+        .eq('agency_id', agencyId);
+      if (error) throw error;
+      return id;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getVisitsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Conversations WhatsApp                                              */
+/* ------------------------------------------------------------------ */
+
+export function useConversations(agencyId?: string) {
+  return useQuery({
+    queryKey: getConversationsQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    queryFn: async (): Promise<ConversationRow[]> => {
+      if (!agencyId) return [];
+      const { data, error } = await db()
+        .from('conversations')
+        .select('id, agency_id, contact_id, whatsapp_connection_id, status, mode, assigned_user_id, last_message_at, created_at, updated_at')
+        .eq('agency_id', agencyId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useCreateConversation(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: ConversationCreateInput) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('conversations')
+        .insert({ ...input, agency_id: agencyId })
+        .select('id, agency_id, contact_id, whatsapp_connection_id, status, mode, assigned_user_id, last_message_at, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getConversationsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateConversation(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: ConversationUpdateInput }) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('conversations')
+        .update(input)
+        .eq('id', id)
+        .eq('agency_id', agencyId)
+        .select('id, agency_id, contact_id, whatsapp_connection_id, status, mode, assigned_user_id, last_message_at, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getConversationsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getConversationMessagesQueryKey(variables.id) }),
+      ]);
+    },
+  });
+}
+
+export function useDeleteConversation(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      // Suppression du fil + des messages (pas de cascade garantie côté client).
+      const messages = await db()
+        .from('conversation_messages')
+        .delete()
+        .eq('conversation_id', id)
+        .eq('agency_id', agencyId);
+      if (messages.error) throw messages.error;
+      const { error } = await db()
+        .from('conversations')
+        .delete()
+        .eq('id', id)
+        .eq('agency_id', agencyId);
+      if (error) throw error;
+      return id;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getConversationsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+export function useConversationMessages(agencyId?: string, conversationId?: string) {
+  return useQuery({
+    queryKey: getConversationMessagesQueryKey(conversationId),
+    enabled: Boolean(agencyId && conversationId),
+    queryFn: async (): Promise<ConversationMessageRow[]> => {
+      if (!agencyId || !conversationId) return [];
+      const { data, error } = await db()
+        .from('conversation_messages')
+        .select('id, agency_id, conversation_id, sender_type, sender_user_id, message_type, content, provider_message_id, metadata, created_at')
+        .eq('agency_id', agencyId)
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useSendMessage(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: MessageCreateInput & { sender_user_id?: string | null }) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('conversation_messages')
+        .insert({
+          agency_id: agencyId,
+          conversation_id: input.conversation_id,
+          sender_type: input.sender_type ?? 'agent',
+          sender_user_id: input.sender_user_id ?? null,
+          message_type: input.message_type ?? 'text',
+          content: input.content,
+          metadata: {},
+        })
+        .select('id, agency_id, conversation_id, sender_type, sender_user_id, message_type, content, provider_message_id, metadata, created_at')
+        .single();
+      if (error) throw error;
+      await db()
+        .from('conversations')
+        .update({ last_message_at: new Date().toISOString() })
+        .eq('id', input.conversation_id)
+        .eq('agency_id', agencyId);
+      return data;
+    },
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getConversationMessagesQueryKey(variables.conversation_id) }),
+        queryClient.invalidateQueries({ queryKey: getConversationsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+      ]);
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Relances (automatisations)                                          */
+/* ------------------------------------------------------------------ */
+
+export function useFollowUps(agencyId?: string) {
+  return useQuery({
+    queryKey: getFollowUpsQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    queryFn: async (): Promise<FollowUpRow[]> => {
+      if (!agencyId) return [];
+      const { data, error } = await db()
+        .from('follow_ups')
+        .select('id, agency_id, contact_id, assigned_user_id, conversation_id, type, scheduled_at, completed_at, status, notes, created_at, updated_at')
+        .eq('agency_id', agencyId)
+        .order('scheduled_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useCreateFollowUp(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: FollowUpCreateInput) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('follow_ups')
+        .insert({ ...input, agency_id: agencyId })
+        .select('id, agency_id, contact_id, assigned_user_id, conversation_id, type, scheduled_at, completed_at, status, notes, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getFollowUpsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getDashboardSummaryQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateFollowUp(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: FollowUpUpdateInput }) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('follow_ups')
+        .update(input)
+        .eq('id', id)
+        .eq('agency_id', agencyId)
+        .select('id, agency_id, contact_id, assigned_user_id, conversation_id, type, scheduled_at, completed_at, status, notes, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: getFollowUpsQueryKey(agencyId) });
+    },
+  });
+}
+
+export function useDeleteFollowUp(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { error } = await db()
+        .from('follow_ups')
+        .delete()
+        .eq('id', id)
+        .eq('agency_id', agencyId);
+      if (error) throw error;
+      return id;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getFollowUpsQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Connexions WhatsApp                                                 */
+/* ------------------------------------------------------------------ */
+
+export function useWhatsAppConnections(agencyId?: string) {
+  return useQuery({
+    queryKey: getWhatsAppConnectionsQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    queryFn: async (): Promise<WhatsAppConnectionRow[]> => {
+      if (!agencyId) return [];
+      const { data, error } = await db()
+        .from('whatsapp_connections')
+        .select('id, agency_id, provider, connection_name, phone_number, phone_number_id, instance_id, status, credentials_ref, config, last_connected_at, created_at, updated_at')
+        .eq('agency_id', agencyId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useCreateWhatsAppConnection(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: WhatsAppConnectionCreateInput) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { data, error } = await db()
+        .from('whatsapp_connections')
+        .insert({ ...input, agency_id: agencyId })
+        .select('id, agency_id, provider, connection_name, phone_number, phone_number_id, instance_id, status, credentials_ref, config, last_connected_at, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: getWhatsAppConnectionsQueryKey(agencyId) });
+    },
+  });
+}
+
+export function useUpdateWhatsAppConnection(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, input }: { id: string; input: WhatsAppConnectionUpdateInput }) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const payload = {
+        ...input,
+        ...(input.status === 'connected' ? { last_connected_at: new Date().toISOString() } : {}),
+      };
+      const { data, error } = await db()
+        .from('whatsapp_connections')
+        .update(payload)
+        .eq('id', id)
+        .eq('agency_id', agencyId)
+        .select('id, agency_id, provider, connection_name, phone_number, phone_number_id, instance_id, status, credentials_ref, config, last_connected_at, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: getWhatsAppConnectionsQueryKey(agencyId) });
+    },
+  });
+}
+
+export function useDeleteWhatsAppConnection(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { error } = await db()
+        .from('whatsapp_connections')
+        .delete()
+        .eq('id', id)
+        .eq('agency_id', agencyId);
+      if (error) throw error;
+      return id;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: getWhatsAppConnectionsQueryKey(agencyId) });
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Notifications                                                       */
+/* ------------------------------------------------------------------ */
+
+export function useNotifications(agencyId?: string) {
+  return useQuery({
+    queryKey: getNotificationsQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    queryFn: async (): Promise<NotificationRow[]> => {
+      if (!agencyId) return [];
+      const { data, error } = await db()
+        .from('notifications')
+        .select('id, agency_id, user_id, type, title, message, data, read_at, created_at')
+        .eq('agency_id', agencyId)
+        .order('created_at', { ascending: false })
+        .limit(30);
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useMarkNotificationRead(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { error } = await db()
+        .from('notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('agency_id', agencyId)
+        .is('read_at', null);
+      if (error) throw error;
+      return id;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: getNotificationsQueryKey(agencyId) });
+    },
+  });
+}
+
+export function useMarkAllNotificationsRead(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!agencyId) throw new Error('Aucune agence active n’est sélectionnée.');
+      const { error } = await db()
+        .from('notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('agency_id', agencyId)
+        .is('read_at', null);
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: getNotificationsQueryKey(agencyId) });
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Suivi des consultations de biens (statistiques réelles)             */
+/* ------------------------------------------------------------------ */
+
+export function useTrackPropertyView(agencyId?: string, propertyId?: string) {
+  return useMutation({
+    mutationFn: async () => {
+      if (!agencyId || !propertyId) return;
+      const { error } = await db().from('usage_events').insert({
+        agency_id: agencyId,
+        event_type: 'property_viewed',
+        entity_type: 'property',
+        entity_id: propertyId,
+        metadata: {},
+        event_key: `view:${propertyId}:${crypto.randomUUID()}`,
+      });
+      if (error) throw error;
+    },
+    retry: false,
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Inscription d’agence (onboarding)                                   */
+/* ------------------------------------------------------------------ */
+
+function sanitizeLogoFileName(name: string) {
+  return (
+    name
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'logo'
+  );
+}
+
+const MAX_LOGO_SIZE = 3 * 1024 * 1024;
+const SUPPORTED_LOGO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml']);
+
+export function useCreateAgency() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: OnboardingInput): Promise<AgencyRow> => {
+      const { data, error } = await db().rpc('create_agency_for_self', {
+        p_name: input.name,
+        p_legal_name: input.legal_name ?? null,
+        p_phone: input.phone ?? null,
+        p_email: input.email ?? null,
+        p_address: input.address ?? null,
+        p_city: input.city ?? null,
+        p_country: input.country ?? 'Mali',
+        p_timezone: input.timezone ?? 'Africa/Bamako',
+        p_currency: input.currency ?? 'XOF',
+        p_description: input.description ?? null,
+        p_logo_url: null,
+      });
+      if (error) throw error;
+      const agency = data as unknown as AgencyRow;
+
+      if (input.logo && agency?.id) {
+        const file = input.logo;
+        if (!SUPPORTED_LOGO_TYPES.has(file.type)) {
+          throw new Error('Le logo doit être une image JPG, PNG, WebP ou SVG.');
+        }
+        if (file.size > MAX_LOGO_SIZE) {
+          throw new Error('Le logo pèse 3 Mo maximum.');
+        }
+        const objectPath = `agencies/${agency.id}/logo-${crypto.randomUUID()}-${sanitizeLogoFileName(file.name)}`;
+        const storage = getSupabaseClient().storage.from('agency-assets');
+        const { error: uploadError } = await storage.upload(objectPath, file, {
+          cacheControl: '3600',
+          contentType: file.type,
+          upsert: false,
+        });
+        if (uploadError) throw uploadError;
+        const { data: publicUrlData } = storage.getPublicUrl(objectPath);
+        const logoUrl = publicUrlData?.publicUrl ?? null;
+        if (logoUrl) {
+          const { error: updateError } = await db()
+            .from('agencies')
+            .update({ logo_url: logoUrl })
+            .eq('id', agency.id);
+          if (updateError) throw updateError;
+          agency.logo_url = logoUrl;
+        }
+      }
+
+      return agency;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'memberships'] }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'agencies'] }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'platform-role'] }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'profile'] }),
+      ]);
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Espace plateforme (admin)                                           */
+/* ------------------------------------------------------------------ */
+
+export function useAllAgencies() {
+  return useQuery({
+    queryKey: getAllAgenciesQueryKey(),
+    queryFn: async () => {
+      const [agenciesRes, subscriptionsRes, plansRes, membersRes] = await Promise.all([
+        db().from('agencies').select(AGENCY_COLUMNS).order('created_at', { ascending: false }),
+        db()
+          .from('agency_subscriptions')
+          .select('id, agency_id, plan_id, status, starts_at, ends_at, trial_ends_at, created_at, updated_at'),
+        db()
+          .from('plans')
+          .select('id, name, description, price_monthly, currency, max_members, max_properties, max_whatsapp_connections, monthly_ai_tokens, monthly_conversations, features, created_at, updated_at')
+          .order('price_monthly', { ascending: true }),
+        db()
+          .from('agency_members')
+          .select('id, agency_id, user_id, role, status, created_at, updated_at'),
+      ]);
+      const firstError =
+        agenciesRes.error ?? subscriptionsRes.error ?? plansRes.error ?? membersRes.error;
+      if (firstError) throw firstError;
+      return {
+        agencies: agenciesRes.data as AgencyRow[],
+        subscriptions: subscriptionsRes.data as AgencySubscriptionRow[],
+        plans: plansRes.data as PlanRow[],
+        members: membersRes.data as AgencyMemberRow[],
+      };
+    },
+  });
+}
+
+export function useAllProperties() {
+  return useQuery({
+    queryKey: getAllPropertiesQueryKey(),
+    queryFn: async (): Promise<PropertyRow[]> => {
+      const { data, error } = await db()
+        .from('properties')
+        .select('id, agency_id, reference, title, description, transaction_type, property_type, status, price, currency, neighborhood, city, address, bedrooms, bathrooms, area_m2, latitude, longitude, metadata, created_at, updated_at')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useAllContacts() {
+  return useQuery({
+    queryKey: getAllContactsQueryKey(),
+    queryFn: async (): Promise<ContactRow[]> => {
+      const { data, error } = await db()
+        .from('contacts')
+        .select('id, agency_id, first_name, last_name, phone, email, whatsapp_number, status, source, assigned_user_id, notes, metadata, created_at, updated_at')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function useAllMediaRefs() {
+  return useQuery({
+    queryKey: ['sofia', 'platform', 'media-refs'],
+    queryFn: async (): Promise<Array<{ agency_id: string; property_id: string }>> => {
+      const { data, error } = await db()
+        .from('property_media')
+        .select('agency_id, property_id');
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function usePropertyViewStats() {
+  return useQuery({
+    queryKey: ['sofia', 'platform', 'property-views'],
+    queryFn: async (): Promise<Array<{ property_id: string; views: number }>> => {
+      const { data, error } = await db()
+        .from('usage_events')
+        .select('entity_id, event_type')
+        .eq('event_type', 'property_viewed')
+        .limit(2000);
+      if (error) throw error;
+      const counts = new Map<string, number>();
+      for (const row of data ?? []) {
+        if (!row.entity_id) continue;
+        counts.set(row.entity_id, (counts.get(row.entity_id) ?? 0) + 1);
+      }
+      return [...counts.entries()].map(([property_id, views]) => ({ property_id, views }));
+    },
+    refetchInterval: 60_000,
+  });
+}
+
+export function useActivityLog(limit = 100) {
+  return useQuery({
+    queryKey: getActivityLogQueryKey(limit),
+    queryFn: async (): Promise<ActivityLogRow[]> => {
+      const { data, error } = await db()
+        .from('activity_log')
+        .select('id, agency_id, user_id, action, entity_type, entity_id, summary, metadata, created_at')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+export function usePlatformSummary() {
+  return useQuery({
+    queryKey: getPlatformSummaryQueryKey(),
+    queryFn: async (): Promise<PlatformSummary> => {
+      const headCount = async (
+        table:
+          | 'agencies'
+          | 'properties'
+          | 'contacts'
+          | 'property_visits'
+          | 'conversations'
+          | 'conversation_messages'
+          | 'follow_ups'
+          | 'activity_log',
+      ) => {
+        const { count, error } = await db()
+          .from(table)
+          .select('id', { count: 'exact', head: true });
+        if (error) throw error;
+        return count ?? 0;
+      };
+
+      const since30d = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+
+      const [
+        agencies,
+        agenciesActive,
+        properties,
+        propertiesAvailable,
+        propertiesSold,
+        contacts,
+        leads,
+        visits,
+        conversations,
+        messages,
+        followUpsPending,
+        subscriptions,
+        inactiveAgenciesAgg,
+        incompleteAgg,
+      ] = await Promise.all([
+        headCount('agencies'),
+        db().from('agencies').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+        headCount('properties'),
+        db().from('properties').select('id', { count: 'exact', head: true }).eq('status', 'available'),
+        db().from('properties').select('id', { count: 'exact', head: true }).in('status', ['sold', 'rented']),
+        headCount('contacts'),
+        db().from('contacts').select('id', { count: 'exact', head: true }).eq('status', 'lead'),
+        headCount('property_visits'),
+        headCount('conversations'),
+        headCount('conversation_messages'),
+        db().from('follow_ups').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+        db().from('agency_subscriptions').select('id, agency_id, status, ends_at, trial_ends_at'),
+        db().from('agencies').select('id, status, updated_at'),
+        db().from('properties').select('id, status, description, city, price'),
+      ]);
+
+      const headErrors = [
+        agenciesActive,
+        propertiesAvailable,
+        propertiesSold,
+        leads,
+        followUpsPending,
+        subscriptions,
+        inactiveAgenciesAgg,
+        incompleteAgg,
+      ]
+        .map((r) => r.error)
+        .filter(Boolean);
+      if (headErrors.length) throw headErrors[0];
+
+      const mediaRefs = await db().from('property_media').select('property_id');
+      if (mediaRefs.error) throw mediaRefs.error;
+      const withPhoto = new Set((mediaRefs.data ?? []).map((row) => row.property_id));
+      const propertiesWithoutPhoto = (incompleteAgg.data ?? []).filter(
+        (row) => !withPhoto.has(row.id),
+      ).length;
+
+      const incompleteProperties = (incompleteAgg.data ?? []).filter((row) => {
+        const missingDescription = !row.description || row.description.trim().length < 10;
+        const missingCity = !row.city || row.city.trim().length === 0;
+        const missingPrice = typeof row.price !== 'number' || row.price <= 0;
+        const draftOrUnavailable = ['draft', 'archived'].includes(row.status);
+        return !draftOrUnavailable && (missingDescription || missingCity || missingPrice);
+      }).length;
+
+      const lastActivityByAgency = new Map<string, string>();
+      const activity = await db()
+        .from('activity_log')
+        .select('agency_id, created_at')
+        .not('agency_id', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (activity.error) throw activity.error;
+      for (const row of activity.data ?? []) {
+        if (row.agency_id && !lastActivityByAgency.has(row.agency_id)) {
+          lastActivityByAgency.set(row.agency_id, row.created_at);
+        }
+      }
+      const inactiveAgencies = (inactiveAgenciesAgg.data ?? []).filter((agency) => {
+        const last = lastActivityByAgency.get(agency.id);
+        if (!last) return true;
+        return new Date(last).getTime() < new Date(since30d).getTime();
+      }).length;
+
+      const subs = subscriptions.data ?? [];
+      const now = Date.now();
+      const activeSubscriptions = subs.filter(
+        (s) =>
+          s.status === 'active' &&
+          (!s.ends_at || new Date(s.ends_at).getTime() > now),
+      ).length;
+      const trialSubscriptions = subs.filter(
+        (s) =>
+          s.status === 'trial' &&
+          (!s.trial_ends_at || new Date(s.trial_ends_at).getTime() > now),
+      ).length;
+      const expiredSubscriptions = subs.filter(
+        (s) =>
+          (s.status === 'active' && s.ends_at && new Date(s.ends_at).getTime() <= now) ||
+          (s.status === 'trial' && s.trial_ends_at && new Date(s.trial_ends_at).getTime() <= now),
+      ).length;
+
+      return {
+        agenciesTotal: agencies,
+        agenciesActive: agenciesActive.count ?? 0,
+        agenciesSuspended: agencies - (agenciesActive.count ?? 0),
+        propertiesTotal: properties,
+        propertiesAvailable: propertiesAvailable.count ?? 0,
+        propertiesSold: propertiesSold.count ?? 0,
+        propertiesWithoutPhoto,
+        contactsTotal: contacts,
+        leadsTotal: leads.count ?? 0,
+        visitsTotal: visits,
+        conversationsTotal: conversations,
+        messagesTotal: messages,
+        followUpsPending: followUpsPending.count ?? 0,
+        activeSubscriptions,
+        trialSubscriptions,
+        expiredSubscriptions,
+        inactiveAgencies,
+        incompleteProperties,
+      };
+    },
+    refetchInterval: 60_000,
+  });
+}
+
+export type AgencyAdminActionInput = {
+  agencyId: string;
+  status: string;
+  subscriptionStatus?: string;
+};
+
+export function useAdminUpdateAgency() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ agencyId, status, subscriptionStatus }: AgencyAdminActionInput) => {
+      const { data, error } = await db()
+        .from('agencies')
+        .update({ status })
+        .eq('id', agencyId)
+        .select(AGENCY_COLUMNS)
+        .single();
+      if (error) throw error;
+      if (subscriptionStatus) {
+        const { error: subError } = await db()
+          .from('agency_subscriptions')
+          .update({ status: subscriptionStatus })
+          .eq('agency_id', agencyId);
+        if (subError) throw subError;
+      }
+      return data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getAllAgenciesQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getPlatformSummaryQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'agencies'] }),
+      ]);
+    },
+  });
+}
+
+export function useAdminUpdateSubscription() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      subscriptionId,
+      status,
+      ends_at,
+      trial_ends_at,
+    }: {
+      subscriptionId: string;
+      status: string;
+      ends_at?: string;
+      trial_ends_at?: string;
+    }) => {
+      const payload: { status: string; ends_at?: string; trial_ends_at?: string } = { status };
+      if (ends_at !== undefined) payload.ends_at = ends_at;
+      if (trial_ends_at !== undefined) payload.trial_ends_at = trial_ends_at;
+      const { data, error } = await db()
+        .from('agency_subscriptions')
+        .update(payload)
+        .eq('id', subscriptionId)
+        .select('id, agency_id, plan_id, status, starts_at, ends_at, trial_ends_at, created_at, updated_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getSubscriptionsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getAllAgenciesQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getPlatformSummaryQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+export type UsageEventInsert = Pick<UsageEventRow, 'agency_id' | 'event_type' | 'event_key'> &
+  Partial<Pick<UsageEventRow, 'user_id' | 'entity_type' | 'entity_id' | 'metadata'>>;
+
+export function useLogUsageEvent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: UsageEventInsert) => {
+      const { data, error } = await db()
+        .from('usage_events')
+        .insert({ metadata: {}, ...input })
+        .select('id, agency_id, user_id, event_type, entity_type, entity_id, metadata, event_key, created_at')
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['sofia', 'activity'] });
+    },
+    retry: false,
   });
 }
