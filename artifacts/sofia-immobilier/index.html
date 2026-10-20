@@ -1,21 +1,30 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>Sofia Immobilier</title>
-    <meta name="description" content="Sofia Immobilier — built on Replit. Update this description to reflect the app." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sofia Immobilier — Gestion d'agences immobilières</title>
+    <meta name="description" content="Sofia Immobilier — le logiciel des agences immobilières de Bamako : biens, contacts, visites, chiffre d'affaires et agent WhatsApp." />
     <meta name="robots" content="index, follow" />
     <meta property="og:title" content="Sofia Immobilier" />
-    <meta property="og:description" content="Sofia Immobilier — built on Replit. Update this description to reflect the app." />
+    <meta property="og:description" content="Le logiciel des agences immobilières de Bamako : biens, contacts, visites, CA et agent WhatsApp." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Sofia Immobilier" />
-    <meta name="twitter:description" content="Sofia Immobilier — built on Replit. Update this description to reflect the app." />
+    <meta name="twitter:description" content="Le logiciel des agences immobilières de Bamako." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Applique le thème enregistré avant le premier rendu (aucun flash blanc/noir).
+      try {
+        var theme = localStorage.getItem('sofia-theme');
+        if (theme === 'dark' || theme === 'light') {
+          document.documentElement.setAttribute('data-theme', theme);
+        }
+      } catch (e) { /* stockage indisponible */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>
