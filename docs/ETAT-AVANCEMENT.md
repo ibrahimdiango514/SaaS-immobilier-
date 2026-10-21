@@ -840,3 +840,168 @@ navigateur : tout ce qui suit reste à confirmer visuellement.
 - Réponse réelle de Groq (`llama-3.3-70b-versatile`), latence, et qualité des
   réponses de l'assistant.
 - Téléversement réel des photos et du logo (Storage), aperçus, redimensionnement.
+
+---
+
+# RÉCAPITULATIF FINAL — BLOCS 1 À 10 TERMINÉS
+
+Chaîne de commits sur `arena/ffbfe14e-saas-immobilier` :
+`bb2d49d` (merge de `arena/eaaefdc5-saas-immobilier`) → `f38919d` (B1) →
+`a49fa0d` (B2) → `c4f33c4` (B3) → `7719177` (B4) → `ae73ebc` (B5) →
+`3a16606` (B6) → `ff1513f` (B7) → `ebac5b6` (B8) → `d241150` (B9) →
+`34b5ddc` (B10).
+
+**Point de départ pour une prochaine session : commit `34b5ddc`.**
+
+À chaque bloc : `pnpm run typecheck` OK et `PORT=3000 BASE_PATH=/ pnpm run build` OK.
+
+## Note sur la branche
+Vous aviez demandé de pousser sur `arena/eaaefdc5-saas-immobilier`. Les règles de
+la plateforme imposent de travailler exclusivement sur la branche de session
+`arena/ffbfe14e-saas-immobilier`. J'ai résolu le conflit en **mergeant** votre
+branche dans la branche de session (commit `bb2d49d`) : tout votre travail
+antérieur est donc inclus, et rien n'a été poussé sur `main` ni sur
+`arena/cffd2507-saas-immobilier` (Netlify production), conformément à votre
+consigne.
+
+## Par bloc : fait / testé / reste
+
+| Bloc | Fait | Testé | Reste |
+|---|---|---|---|
+| **1** Paiement abonnement | Déclaration de paiement (montant, date, Orange Money/Wave, référence, capture en bucket PRIVÉ), instructions lues depuis `platform_settings`, états visible/approuvé/rejeté avec motif | typecheck, build, RPC et politiques vérifiés en base | Saisir les vrais numéros dans Admin → Réglages (la ligne `payment_instructions` existe mais ses champs `name`/`number` sont **vides**) |
+| **2** Admin | Écran Réglages, file « Paiements à valider », demandes de changement d'offre, changement d'offre en un clic, graphique abonnements sur données réelles (`platform_subscription_revenue`) | typecheck, build, RPC vérifiés | Rendu réel des graphiques |
+| **3** Photos | Compteur « 7/10 », message clair à la limite + « Passer au Pro », envoi multiple non abortif (ce qui passe est envoyé, le refusé est listé) | typecheck, build, trigger `enforce_photo_limit` vérifié | Comportement réel d'un envoi de 12 fichiers |
+| **4** Agence + logo | Édition owner/admin (nom, raison sociale, tél, email, adresse, ville, description, commission), lecture seule pour agent ; logo PNG/JPG/WebP 2 Mo redimensionné 512 px, aperçu, remplacement, suppression, bucket `agency-assets`, affiché en barre latérale et en-tête ; tracé dans le journal d'activité | typecheck, build, politiques Storage vérifiées | Redimensionnement réel d'une image |
+| **5** Réinitialisation mot de passe agent | Edge Function `reset-agent-password` (**déployée**, `verify_jwt=true`) : appelant owner/admin, cible même agence et non-owner, mot de passe généré côté serveur, `must_change_password=true`, affiché une fois, action tracée ; bouton dans Équipe | typecheck, build, privilèges vérifiés | Appel réel depuis un navigateur |
+| **6** Suppression / archivage | Owner + admin seulement, confirmation, purge Storage + lignes photo, alerte si opérations CA ou opportunités liées, « Archiver » pour vendu/loué (masqué des listes, conservé dans l'historique et le CA), les biens archivés ne comptent plus dans la limite d'offre | typecheck, build, migration appliquée, FK vérifiées une à une | Suppression réelle d'un bien avec photos |
+| **7** Consommation IA + WhatsApp | Admin : table par agence (tokens/quota, messages/plafond, conversations), jauges, alertes 80 % et 100 %, colonne fournisseur WhatsApp avec badge « non officiel » pour Evolution API. Agence : jauge « Utilisation IA ce mois » dans Mon offre. `record_ai_usage` réservé service_role, guides n8n dans `docs/` | typecheck, build, `has_function_privilege` vérifié, rollback écrit | Branchement réel d'un flux n8n |
+| **8** Assistant IA | `dashboard-assistant` **déployée** (v1, ACTIVE, `verify_jwt=true`) : agence déduite du JWT, 7 contrôles en chaîne, outils lecture seule exécutés avec le JWT utilisateur (RLS appliquée), CA/abonnement réservés owner/admin, anti-injection, Groq `llama-3.3-70b-versatile`, tokens enregistrés. UI : page réécrite, bouton flottant mobile-first, suggestions, « Résumé du jour », alertes intelligentes | typecheck, build, colonnes réelles vérifiées avant écriture, 3 outils cassés corrigés | **Poser `GROQ_API_KEY`** (voir ci-dessous), puis test réel. Aucune agence n'est encore Pro/Premium → l'assistant répondra `assistant_requires_pro_plan` tant qu'un plan n'est pas changé |
+| **9** Navigation mobile | Cause racine trouvée : `.topbar { display:none }` sous 760 px et l'espace admin n'avait **aucun** en-tête mobile. Bouton retour déterministe partagé (agence, admin, pages publiques), nouvel en-tête mobile admin, cibles 44 px, safe-area, repli sur la page parente, déconnexion reachable partout | typecheck, build | Rendu réel sous 760 px et dans une iframe de preview |
+| **10** Audits | 7 failles corrigées en base, 2 Edge Functions redeployées, gardes de rôles ajoutées, 16 surfaces blanches + 3 pastilles dorées corrigées en mode sombre | typecheck, build, requêtes de vérification, lecture réelle sur les 3 agences | 3 points soumis à votre accord (§ 10.6) |
+
+## ⚠️ LA SEULE ACTION QUI VOUS RESTE — poser la clé Groq
+
+Ne me donnez **jamais** la clé dans le chat. Exécutez vous-même :
+
+```bash
+supabase secrets set GROQ_API_KEY=<votre_clé_groq> --project-ref xbuuhfwobrafcbgtdgjx
+```
+
+Vérification :
+
+```bash
+supabase secrets list --project-ref xbuuhfwobrafcbgtdgjx
+```
+
+Tant que ce secret est absent, l'assistant répond
+`assistant_not_configured` → « L'assistant n'est pas encore configuré côté
+serveur ». **Tout le reste de l'application fonctionne normalement.**
+
+Pour tester l'assistant, il faut aussi qu'une agence soit en offre Pro ou
+Premium — sinon la réponse est `assistant_requires_pro_plan` (comportement
+attendu). Le plus simple : Admin → Abonnements → changer l'offre de
+« SBC AI Agency Demo » ou « Diango agengy » en Pro (un clic, BLOC 2), ou
+valider une déclaration de paiement.
+
+## Tout ce qui a été appliqué en base ou déployé
+
+### Base (projet `xbuuhfwobrafcbgtdgjx`, PG 17.6, eu-central-1)
+
+**Fonctions créées — BLOC 1/2**
+`public.agency_payment_access(uuid)`, `public.admin_update_platform_setting(text,jsonb)`,
+`public.platform_subscription_revenue(integer DEFAULT 12)`
+
+**Colonnes + fonction modifiée — BLOC 6**
+`properties.is_archived boolean NOT NULL DEFAULT false`, `properties.archived_at`,
+index partiels ; `public.enforce_property_limit()` modifiée (`AND is_archived = false`) —
+**seule fonction existante modifiée au BLOC 6**
+
+**Fonctions créées — BLOC 7**
+`public.record_ai_usage(...)` (service_role seul), `public.agency_ai_usage(uuid)`,
+`public.platform_agency_usage()`
+
+**BLOC 10**
+- `public.agence_active(uuid)` — wrapper **additif** vers `saas_immobilier.agence_active`
+- `public.agency_billing_state(uuid)` — **modifiée** : garde d'isolation
+- `public.agency_usage_snapshot(uuid)` — **modifiée** : garde d'isolation, sql → plpgsql, biens archivés exclus de `properties_used`
+- `saas_immobilier.invitation_attempts` — RLS activée, privilèges retirés à anon/authenticated, politique `invitation_attempts_select_admin`
+- `storage.objects` — politique `payment_proofs_insert` durcie (contrôle du chemin)
+- `anon` retiré à 10 fonctions ; `authenticated` retiré à `suspend_overdue_agencies()`
+
+**Migrations / rollbacks** (miroir exact, dans `db/migrations/` et `db/rollback/`)
+`2026-10-20_lot_a.sql`, `2026-10-20_lot_a_suite_invitation_status.sql`,
+`2026-10-21_lot_b_photos_agent.sql`, `2026-10-21_bloc1-2_paiements_admin.sql`,
+`2026-10-21_bloc6_archive_suppression.sql`, `2026-10-21_bloc7_usage_ia_whatsapp.sql`,
+`2026-10-21_bloc10_audit_securite.sql`, `2026-10-21_bloc10_wrapper_agence_active.sql`,
+`2026-10-21_bloc10_gardes_isolation.sql`.
+
+⚠️ Les migrations BLOC 6, 7 et 10 ont été appliquées **directement** (via
+`create_migration` pour le B6, via `execute_query` requête par requête pour les B7
+et B10). Celles passées par `execute_query` ne sont **pas** enregistrées dans
+`supabase_migrations.schema_migrations` : les fichiers locaux restent la seule
+trace. C'est volontaire — `create_migration` est tout-ou-rien et échouait sur le
+SQL long du BLOC 7.
+
+### Edge Functions déployées
+
+| Slug | Version | verify_jwt | État |
+|---|---|---|---|
+| `dashboard-assistant` | 1 | true | ACTIVE (BLOC 8, créée) |
+| `reset-agent-password` | — | true | ACTIVE (BLOC 5, créée) |
+| `create-agency-member` | **4** | true | ACTIVE (BLOC 10, corrigée `p_agency_id`) |
+| `invite-agency-member` | **3** | true | ACTIVE (BLOC 10, corrigée `p_agency_id`) |
+| `redeem-agency-invitation` | — | — | non modifiée |
+
+### Secret
+`GROQ_API_KEY` — **toujours absent**, à poser par vous (commande ci-dessus).
+
+### pg_cron
+`sofia-lot-a-suspend-overdue` (job_id 1, `*/15 * * * *`,
+`SELECT public.suspend_overdue_agencies()`) — inchangé, et **toujours
+fonctionnel** après le retrait de `authenticated` (le job s'exécute en tant que
+`postgres`, propriétaire de la fonction).
+
+## Tests manuels à faire (le sandbox n'a ni navigateur ni accès à `*.supabase.co`)
+
+### Après avoir posé `GROQ_API_KEY`
+1. Passer une agence en **Pro** (Admin → Abonnements → changement d'offre en un clic).
+2. Se connecter avec cette agence → `/assistant-ia` → poser « Combien de biens sont disponibles ? » : la réponse doit citer des chiffres exacts issus des outils.
+3. Vérifier la ligne « outils · tokens » sous la réponse, et que la jauge « Utilisation IA ce mois » de Mon offre a bougé.
+4. Avec un compte **agent** de cette agence : poser « Quel est mon chiffre d'affaires du mois ? » → l'assistant doit refuser poliment (rien de confidentiel).
+5. Cliquer « Résumé du jour » sur la vue d'ensemble : il ne doit se générer **qu'au clic**, jamais au chargement.
+6. Ouvrir le bouton flottant sur téléphone : panneau pleine largeur, fermeture par Échap / clic extérieur / croix.
+7. Avec une agence en offre **Essentiel** : `/assistant-ia` doit afficher l'aperçu verrouillé (réponses floutées) + « Passer au Pro ».
+8. Dépasser 8 messages en une minute → message de limite clair.
+
+### Parcours complet de bout en bout
+9. **Inscription** → `/inscription` → onboarding → création d'agence → arrivée sur `/dashboard` avec l'agence active.
+10. **Création directe d'un agent** : Équipe → créer un membre → le mot de passe temporaire doit s'afficher **une seule fois** (c'était cassé avant le BLOC 10 : la fonction renvoyait toujours « agence suspendue »).
+11. **Invitation par lien** : Équipe → générer un lien → ouvrir `/rejoindre?token=…` dans une navigation privée → créer le compte → changement de mot de passe imposé.
+12. **Biens + photos** : créer un bien, envoyer 12 photos d'un coup sur une offre Essentiel (limite 10) → les 10 premières passent, les 2 refusées sont listées nommément.
+13. **Déclaration de paiement** : Mon offre → Payer mon abonnement → montant, date, Orange Money ou Wave, référence, capture → l'état « En attente » s'affiche.
+14. **Validation admin** : Admin → Paiements à valider → approuver → l'abonnement doit être prolongé et l'agence réactivée si elle était suspendue ; puis tester le rejet avec motif (le motif doit être visible côté agence).
+15. **Changement d'offre** : agence → demander Pro ; admin → approuver/refuser ; admin → changement direct en un clic.
+16. **Archivage / suppression** : sur un bien vendu → Archiver (il disparaît des listes, reste dans l'historique et le CA, et ne compte plus dans la limite) ; sur un bien avec opérations CA → l'avertissement doit apparaître avant suppression ; confirmer que les fichiers Storage sont bien purgés.
+
+### Navigation mobile (BLOC 9)
+17. Sur téléphone (ou fenêtre étroite) : ouvrir **une page admin** → la flèche de retour, le menu et la déconnexion doivent être présents (c'était entièrement absent avant).
+18. Depuis `/admin` → la flèche doit ramener à l'espace agence.
+19. Depuis la fiche d'un bien (`/biens/:id`) → la flèche doit remonter à `/biens`, pas à `/dashboard`.
+20. Ouvrir directement une fiche par son URL (aucun historique) → la flèche doit fonctionner quand même (repli déterministe).
+21. `/login`, `/inscription`, `/rejoindre`, changement de mot de passe imposé, `/onboarding` : la flèche de retour doit être visible en haut à gauche.
+22. Vérifier que les cibles tactiles font bien ≥ 44 px et que rien n'est coupé par l'encoche du téléphone.
+
+### Mode sombre (BLOC 10)
+23. Basculer en mode sombre et parcourir **toutes** les pages : aucun bouton icône, champ de formulaire, carte, bulle WhatsApp ou pastille ne doit rester blanc.
+24. Vérifier spécifiquement les pastilles « En attente » (Mon offre, file admin) et la pastille de compteur dans la navigation admin : elles étaient illisibles en sombre.
+25. Refaire 23 et 24 en largeur mobile.
+
+### Isolation (BLOC 10)
+26. Avec deux comptes de deux agences différentes : vérifier qu'aucun bien, contact, paiement, photo ou donnée d'assistant de l'une n'apparaît chez l'autre.
+27. Avec un compte **agent** : vérifier l'absence de « Équipe » et de « Mon offre » dans la navigation, **et** que `/mon-offre` saisi en direct affiche le message d'accès refusé, et que le panneau « Chiffre d'affaires » de la vue d'ensemble est absent.
+28. Suspendre une agence (Admin) puis, avec un de ses membres, attendre ~15 s : la session doit être fermée et renvoyée vers `/login` avec un bandeau.
+
+## Points en attente de votre accord (détail au § 10.6)
+1. Rendre la suspension opposable côté base (triggers de limites + déclaration de paiement) — SQL prêt.
+2. Durcir `property_visits_delete_admin`, `property_visits_update_member` et `sales_pipeline_delete_member` (un agent peut aujourd'hui supprimer une visite et une opportunité).
+3. Nettoyer le bucket `bsfood` et ses 11 politiques `roles={public}` (étranger au projet).
