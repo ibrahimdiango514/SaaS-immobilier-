@@ -1949,24 +1949,41 @@ async function uploadPropertyMediaFile(
   return media;
 }
 
+/**
+ * BLOC 3 : résultat détaillé d'un envoi en lot.
+ * `failed` liste les photos refusées (limite de l'offre appliquée par le trigger
+ * `enforce_photo_limit`, fichier illisible, poids, réseau…) : un envoi multiple
+ * n'est plus interrompu au premier échec, les photos qui passent sont conservées
+ * et les refusées sont annoncées à l'utilisateur.
+ */
+export type PropertyMediaBatchResult = {
+  uploaded: PropertyMediaRow[];
+  failed: Array<{ file: File; reason: string }>;
+};
+
 export function useUploadPropertyMediaBatch(agencyId?: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (input: PropertyMediaBatchInput): Promise<PropertyMediaRow[]> => {
+    mutationFn: async (input: PropertyMediaBatchInput): Promise<PropertyMediaBatchResult> => {
       if (!agencyId || !input.propertyId) throw new Error('Aucune agence ni aucun bien actif n’est sélectionné.');
-      if (!input.files.length) return [];
+      if (!input.files.length) return { uploaded: [], failed: [] };
       const uploaded: PropertyMediaRow[] = [];
+      const failed: Array<{ file: File; reason: string }> = [];
       input.onProgress?.(0, input.files.length);
       for (const file of input.files) {
-        const media = await uploadPropertyMediaFile(agencyId, input.propertyId, {
-          file,
-          propertyReference: input.propertyReference,
-          sortOrder: input.startSortOrder + uploaded.length,
-        });
-        uploaded.push(media);
-        input.onProgress?.(uploaded.length, input.files.length);
+        try {
+          const media = await uploadPropertyMediaFile(agencyId, input.propertyId, {
+            file,
+            propertyReference: input.propertyReference,
+            sortOrder: input.startSortOrder + uploaded.length,
+          });
+          uploaded.push(media);
+        } catch (error) {
+          failed.push({ file, reason: getSupabaseErrorMessage(error, 'envoyer la photo') });
+        }
+        input.onProgress?.(uploaded.length + failed.length, input.files.length);
       }
-      return uploaded;
+      return { uploaded, failed };
     },
     onSuccess: async (_data, variables) => {
       await Promise.all([

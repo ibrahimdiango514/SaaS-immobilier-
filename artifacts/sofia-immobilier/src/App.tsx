@@ -37,6 +37,9 @@ import {
   type AgencySettingsInput, type ProfileUpdateInput,
 } from '@/lib/data-hooks';
 import { compressImages } from '@/lib/image-tools';
+// BLOC 3 : compteur de photos et decoupe des envois multiples selon l'offre.
+import { formatQuota, splitByPhotoQuota, usePhotoQuota } from '@/lib/plan-limits';
+import { PhotoQuotaBar } from '@/components/photo-quota';
 import { ThemeToggle } from '@/lib/theme';
 import type { AgencyMemberRow, PropertyRow, ContactRow, SalesPipelineRow } from '@/lib/database.types';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
@@ -361,7 +364,7 @@ const propertySchema = z.object({
 });
 type PropertyFormValues = z.infer<typeof propertySchema>;
 function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean; onOpenChange: (open: boolean) => void; item: PropertyRow | null; currency: string }) {
-  const { activeAgencyId } = useAgency();
+  const { activeAgencyId, canManageAgency } = useAgency();
   const create = useCreateProperty(activeAgencyId); const update = useUpdateProperty(activeAgencyId);
   const form = useForm<PropertyFormValues>({ resolver: zodResolver(propertySchema), defaultValues: { reference: '', title: '', transaction_type: 'sale', property_type: '', price: 0, currency, status: 'draft', neighborhood: '', city: 'Bamako', address: '', description: '', bedrooms: '', bathrooms: '', area_m2: '', commission_rate: '', rental_commission_rate: '' } });
   const [formError, setFormError] = useState('');
@@ -398,14 +401,30 @@ function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean;
   const [dragOver, setDragOver] = useState(false);
   const [photoNotice, setPhotoNotice] = useState('');
   const existingPhotos = targetId ? (mediaQ.data ?? []) : [];
+  // BLOC 3 : « 7/10 » — photos déjà enregistrées + photos préparées.
+  const photoQuota = usePhotoQuota(activeAgencyId, existingPhotos.length, staged.length);
 
   const addFiles = async (source: FileList | File[] | null) => {
     if (!source) return;
     const files = Array.from(source);
     if (!files.length) return;
     setFormError('');
+    setPhotoNotice('');
+    // BLOC 3 : un envoi multiple qui dépasse la limite n'envoie que ce qui
+    // rentre ; les fichiers refusés sont nommés explicitement.
+    const { accepted, refused } = splitByPhotoQuota(files, photoQuota.remaining);
+    if (refused.length) {
+      const names = refused.slice(0, 3).map((file) => file.name).join(', ');
+      setPhotoNotice(
+        `${refused.length} photo(s) non retenue(s) : ${names}${refused.length > 3 ? '…' : ''}. ` +
+        (photoQuota.reached || accepted.length === 0
+          ? `Limite de ${photoQuota.limit} photos par bien atteinte avec l’offre ${photoQuota.planName}.`
+          : `Seules les ${accepted.length} première(s) rentrent dans la limite de ${photoQuota.limit} photos de l’offre ${photoQuota.planName}.`),
+      );
+    }
+    if (!accepted.length) return;
     try {
-      const compressed = await compressImages(files);
+      const compressed = await compressImages(accepted);
       setStaged((previous) => [
         ...previous,
         ...compressed.map((file) => ({ key: crypto.randomUUID(), file, preview: URL.createObjectURL(file) })),
@@ -503,15 +522,25 @@ function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean;
       setPhotoBusy(true);
       setPhotoProgress({ done: 0, total: staged.length });
       try {
-        await uploadBatch.mutateAsync({
+        const result = await uploadBatch.mutateAsync({
           files: staged.map((entry) => entry.file),
           propertyId: targetProperty.id,
           propertyReference: targetProperty.reference,
           startSortOrder: existingPhotos.length,
           onProgress: (done, total) => setPhotoProgress({ done, total }),
         });
+        // BLOC 3 : un échec partiel n'annule pas les photos qui sont passées.
         clearStaged();
-        onOpenChange(false);
+        if (result.failed.length) {
+          const names = result.failed.slice(0, 3).map((entry) => entry.file.name).join(', ');
+          setFormError(
+            `Le bien est enregistré et ${result.uploaded.length} photo(s) ont été envoyée(s). ` +
+            `${result.failed.length} photo(s) refusée(s) : ${names}${result.failed.length > 3 ? '…' : ''}. ` +
+            `Motif : ${result.failed[0].reason}`,
+          );
+        } else {
+          onOpenChange(false);
+        }
       } catch (error) {
         setFormError(
           `Le bien est enregistré, mais ${staged.length} photo(s) n’ont pas pu être envoyées : ${getSupabaseErrorMessage(error, 'envoyer les photos')} Vous pouvez réessayer — le formulaire reste ouvert.`,
@@ -543,7 +572,7 @@ function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean;
         onDrop={(event) => { event.preventDefault(); setDragOver(false); void addFiles(event.dataTransfer.files); }}>
         <div className="photo-manager-head">
           <strong>Photos du bien</strong>
-          <span data-testid="photo-count">{existingPhotos.length + staged.length} photo(s) · 1re photo = couverture</span>
+          <span data-testid="photo-count">{formatQuota(photoQuota)} photo(s) · 1re photo = couverture</span>
         </div>
         {(existingPhotos.length > 0 || staged.length > 0) && (
           <div className="photo-manager-grid">
@@ -596,8 +625,9 @@ function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean;
             <small>Envoi {photoProgress.done}/{photoProgress.total}…</small>
           </div>
         )}
-        <p className="photo-manager-hint">JPG · PNG · WebP — redimensionnement et compression automatiques, nombre illimité.</p>
-        {photoNotice && <p className="form-feedback" role="status" data-testid="status-photo-notice">{photoNotice}</p>}
+        <PhotoQuotaBar quota={photoQuota} agencyId={activeAgencyId} canManageAgency={canManageAgency} testId="dialog-photos" compact />
+        <p className="photo-manager-hint">JPG · PNG · WebP — redimensionnement et compression automatiques · {photoQuota.unlimited ? 'nombre illimité' : `${photoQuota.limit} photos maximum par bien avec l’offre ${photoQuota.planName}`}.</p>
+        {photoNotice && <p className="form-feedback is-warning" role="status" data-testid="status-photo-notice">{photoNotice}</p>}
       </section>
       {formError && <p className="form-error" role="alert" data-testid="status-property-form-error">{formError}</p>}<div className="form-actions"><Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-property">Annuler</Button><Button type="submit" disabled={isBusy} data-testid="button-submit-property">{isBusy ? 'Enregistrement…' : item ? 'Enregistrer les modifications' : 'Créer le bien'}</Button></div>
     </form></Form>
@@ -701,9 +731,11 @@ function AgencyPage() {
 
 function PropertyDetailPage() {
   const params = useParams<{ id: string }>(); const id = params.id;
-  const { activeAgencyId, activeMembership } = useAgency(); const propertiesQ = useProperties(activeAgencyId);
+  const { activeAgencyId, activeMembership, canManageAgency } = useAgency(); const propertiesQ = useProperties(activeAgencyId);
   const item = propertiesQ.data?.find((property) => property.id === id) ?? null;
   const media = usePropertyMedia(activeAgencyId, id);
+  // BLOC 3 : compteur « 7/10 » de la galerie.
+  const photoQuota = usePhotoQuota(activeAgencyId, media.data?.length ?? 0);
   const uploadBatch = useUploadPropertyMediaBatch(activeAgencyId);
   const reorder = useReorderPropertyMedia(activeAgencyId, id);
   const canDelete = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
@@ -725,10 +757,33 @@ function PropertyDetailPage() {
   const doUploadFiles = async (files: FileList | null) => {
     if (!files || !files.length) return;
     setNotice('');
+    const selected = Array.from(files);
+    // BLOC 3 : envoi multiple au-delà de la limite -> on n'envoie que ce qui
+    // rentre et on nomme les photos refusées.
+    const { accepted, refused } = splitByPhotoQuota(selected, photoQuota.remaining);
+    if (!accepted.length) {
+      setNotice(
+        `Limite atteinte : ${photoQuota.used}/${photoQuota.limit} photos pour l’offre ${photoQuota.planName}. ` +
+        `Supprimez une photo ou passez à une offre supérieure.`,
+      );
+      return;
+    }
     try {
-      const compressed = await compressImages(Array.from(files));
-      await uploadBatch.mutateAsync({ files: compressed, propertyId: id, propertyReference: item.reference, startSortOrder: media.data?.length ?? 0 });
-      setNotice('Photos ajoutées.');
+      const compressed = await compressImages(accepted);
+      const result = await uploadBatch.mutateAsync({ files: compressed, propertyId: id, propertyReference: item.reference, startSortOrder: media.data?.length ?? 0 });
+      const refusedByQuota = refused.map((file) => file.name);
+      const refusedByServer = result.failed.map((entry) => entry.file.name);
+      const allRefused = [...refusedByQuota, ...refusedByServer];
+      if (allRefused.length) {
+        const reason = result.failed[0]?.reason
+          ?? `Limite de ${photoQuota.limit} photos par bien atteinte avec l’offre ${photoQuota.planName}`;
+        setNotice(
+          `${result.uploaded.length} photo(s) ajoutée(s). ${allRefused.length} refusée(s) : ` +
+          `${allRefused.slice(0, 3).join(', ')}${allRefused.length > 3 ? '…' : ''}. Motif : ${reason}.`,
+        );
+      } else {
+        setNotice(`${result.uploaded.length} photo(s) ajoutée(s).`);
+      }
     } catch (error) { setNotice(getSupabaseErrorMessage(error, 'ajouter les photos')); }
   };
   const makeCover = async (photoId: string) => {
@@ -749,9 +804,10 @@ function PropertyDetailPage() {
     <div className="detail-layout"><section className="panel detail-main"><div className="detail-pricebar"><div><span className="form-kicker">Prix affiché</span><strong>{cash(item.price,item.currency)}</strong></div><span className={`status-pill status-${item.status}`}>{propertyStatus[item.status] ?? item.status}</span></div>
       <div className="detail-facts"><div><span>Référence</span><strong>{item.reference}</strong></div><div><span>Transaction</span><strong>{item.transaction_type==='sale'?'Vente':item.transaction_type==='rent'?'Location':'Bail'}</strong></div><div><span>Chambres</span><strong>{item.bedrooms ?? '—'}</strong></div><div><span>Salles d’eau</span><strong>{item.bathrooms ?? '—'}</strong></div><div><span>Surface</span><strong>{item.area_m2 ? `${item.area_m2} m²` : '—'}</strong></div><div><span>Mis à jour</span><strong>{dateLabel(item.updated_at)}</strong></div></div>
       <div className="detail-section"><h2>Localisation</h2><p>{[item.address,item.neighborhood,item.city].filter(Boolean).join(', ') || 'Adresse non renseignée'}</p></div><div className="detail-section"><h2>Description</h2><p>{item.description || 'Aucune description renseignée pour ce bien.'}</p></div></section>
-      <section className="panel gallery-panel"><div className="panel-head"><div><h2>Galerie du bien</h2><p>{media.data?.length ?? 0} photo(s) enregistrée(s)</p></div><Camera size={17}/></div>
+      <section className="panel gallery-panel"><div className="panel-head"><div><h2>Galerie du bien</h2><p><span className="photo-counter" data-testid="text-gallery-photo-count">{formatQuota(photoQuota)}</span> photo(s) enregistrée(s)</p></div><Camera size={17}/></div>
+        <div className="gallery-quota"><PhotoQuotaBar quota={photoQuota} agencyId={activeAgencyId} canManageAgency={canManageAgency} testId="galerie" /></div>
         <div className="gallery-content">{media.isLoading ? <LoadingRows label="Chargement de la galerie"/> : media.error ? <ErrorState error={media.error} retry={useSafeRetry(media)}/> : media.data?.length ? <div className="photo-grid">{media.data.map((photo)=><figure className="photo-item" key={photo.id}>{photo.signedUrl ? <button type="button" className="photo-preview" onClick={()=>setActiveImage(photo.signedUrl)} aria-label={`Agrandir ${photo.file_name}`}><img src={photo.signedUrl} alt={photo.file_name}/></button> : <div className="photo-unavailable">{photo.signedUrlError || 'Aperçu indisponible'}</div>}<figcaption><span>{photo.file_name}</span>{canDelete && <button type="button" className={`icon-button${media.data?.[0]?.id === photo.id ? ' is-cover' : ''}`} onClick={()=>void makeCover(photo.id)} disabled={reorder.isPending || media.data?.[0]?.id === photo.id} aria-label={`Définir ${photo.file_name} en couverture`} title="Mettre en couverture"><Star size={13}/></button>}{canDelete && <button type="button" className="icon-button" onClick={()=>void doDelete(photo)} disabled={removeMedia.isPending} aria-label={`Supprimer ${photo.file_name}`}><Trash2 size={14}/></button>}</figcaption></figure>)}</div> : <div className="gallery-empty"><ImagePlus size={21}/><strong>Aucune photo pour l’instant</strong><span>Les images ajoutées à ce dossier apparaîtront ici.</span></div>}</div>
-        <div className="photo-upload"><label className={`upload-control${uploadBatch.isPending?' is-busy':''}`}><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={uploadBatch.isPending} onChange={(e)=>{void doUploadFiles(e.target.files); e.currentTarget.value='';}}/><ImagePlus size={15}/>{uploadBatch.isPending?'Envoi en cours…':'Ajouter des photos'}</label><p>JPG, PNG ou WebP · compression automatique · illimité · la 1re photo devient la couverture.</p><div className="public-bucket-warning"><ShieldCheck size={15}/><span>Le bucket actuel étant public, une photo enregistrée peut être récupérée par toute personne connaissant son URL ; l’application ne rend pas ce stockage privé.</span></div>{notice && <p className={notice.includes('Impossible')?'form-error':'form-feedback'} role="status">{notice}</p>}</div>
+        <div className="photo-upload"><label className={`upload-control${uploadBatch.isPending?' is-busy':''}`}><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={uploadBatch.isPending} onChange={(e)=>{void doUploadFiles(e.target.files); e.currentTarget.value='';}}/><ImagePlus size={15}/>{uploadBatch.isPending?'Envoi en cours…':'Ajouter des photos'}</label><p>JPG, PNG ou WebP · compression automatique · {photoQuota.unlimited ? 'nombre illimité' : `${photoQuota.limit} maximum par bien (offre ${photoQuota.planName})`} · la 1re photo devient la couverture.</p><div className="public-bucket-warning"><ShieldCheck size={15}/><span>Le bucket actuel étant public, une photo enregistrée peut être récupérée par toute personne connaissant son URL ; l’application ne rend pas ce stockage privé.</span></div>{notice && <p className={notice.includes('Impossible')?'form-error':'form-feedback'} role="status">{notice}</p>}</div>
       </section></div>
     <div className="related-record"><h2>Fiche du bien</h2><span>Créé le {dateLabel(item.created_at)}</span></div>
     {editing && <PropertyDialog key={item.id} open={editing} onOpenChange={setEditing} item={item} currency={item.currency}/>}

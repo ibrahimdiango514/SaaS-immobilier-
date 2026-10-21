@@ -196,3 +196,24 @@ Autres écritures en base :
   `max_photos_per_property`, `monthly_agent_messages`, `modules` ; `PlanRow` complété.
   Les écrans admin affichent « Essentiel / Pro / Premium » au lieu de `starter/pro/enterprise`.
 - `pnpm run typecheck` OK · `pnpm run build` OK.
+
+## BLOC 3 — PHOTOS (compteur et limite) : FAIT
+
+- `src/lib/plan-limits.ts` : `useAgencyPlan` (RPC existant `public.agency_current_plan`),
+  `usePhotoQuota` → `{ limit, used, remaining, reached, unlimited, planName }`,
+  `formatQuota` (« 7/10 »), `splitByPhotoQuota` (découpe d'un envoi multiple),
+  `useUpgradeTargets` + `pickUpgradeTarget` + `useRequestUpgrade`.
+- `src/components/photo-quota.tsx` : jauge + compteur, et à la limite un encadré
+  « Limite atteinte : 10/10 photos avec l'offre Essentiel » avec bouton
+  **« Passer au Pro/Premium »** (→ `request_plan_change`, réservé owner/admin)
+  et lien « Voir mon offre ».
+- `useUploadPropertyMediaBatch` ne s'interrompt plus au premier échec : il renvoie
+  `{ uploaded, failed }`. Les photos qui passent sont conservées, les refusées nommées.
+- Fiche bien (`PropertyDetailPage`) : compteur dans l'en-tête de galerie, jauge,
+  envoi multiple découpé selon la place restante, message listant les photos refusées
+  et le motif ; mention « illimité » remplacée par la limite réelle de l'offre.
+- Formulaire de bien (`PropertyDialog`) : même compteur (photos enregistrées + photos
+  préparées), refus dès la sélection avec noms des fichiers non retenus.
+- La limite reste appliquée **côté base** par le trigger `enforce_photo_limit`
+  (aucune fonction existante modifiée).
+- `pnpm run typecheck` OK · `pnpm run build` OK.
