@@ -11,7 +11,29 @@
 //   5. renvoyer le lien en clair UNE SEULE FOIS.
 // Aucun email n'est envoyé : le lien est partagé manuellement (WhatsApp).
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { corsHeaders, json } from '../_shared/http.ts'
+// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
+// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
+// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
+// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
+// présent dans l'artefact déployé, et la fonction échouait au chargement du
+// module — d'où une création de membre et un lien d'invitation qui ne
+// produisaient rien côté navigateur.
+// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
+// est désormais AUTONOME, sans aucune importation relative.
+// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
+// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
 
 const allowedRoles = new Set(['admin', 'agent'])
 
@@ -54,7 +76,9 @@ Deno.serve(async (request) => {
     target_agency_id: agencyId,
     required_role: 'admin',
   })
-  if (allowedError || allowed !== true) return json({ error: 'agency_admin_or_owner_required' }, 403)
+  if (allowedError || allowed !== true) {
+    return json({ error: 'agency_admin_or_owner_required', details: allowedError?.message ?? null }, 403)
+  }
 
   // 3. Agence non suspendue
   // BLOC 10 : `agence_active` attend `p_agency_id` (et non `agency_id`), et
@@ -62,7 +86,10 @@ Deno.serve(async (request) => {
   // Avec l'ancien nom de paramètre l'appel échouait toujours et la fonction
   // renvoyait `agency_suspended` pour TOUTE agence, même active.
   const { data: active, error: activeError } = await callerClient.rpc('agence_active', { p_agency_id: agencyId })
-  if (activeError || active !== true) return json({ error: 'agency_suspended' }, 403)
+  if (activeError) {
+    return json({ error: 'agency_status_check_failed', details: activeError.message, code: activeError.code ?? null }, 500)
+  }
+  if (active !== true) return json({ error: 'agency_suspended' }, 403)
 
   // 4. Limite d'utilisateurs non atteinte — invitations en attente comprises.
   //    agency_seat_availability compte déjà members_active + invitations_pending.
@@ -91,7 +118,8 @@ Deno.serve(async (request) => {
     const limit = invitationError?.message?.includes('imite')
     return json({
       error: limit ? 'member_limit_reached' : 'invitation_creation_failed',
-      details: invitationError?.message,
+      details: invitationError?.message ?? 'aucune invitation renvoyée',
+      code: invitationError?.code ?? null,
     }, limit ? 409 : 500)
   }
 
@@ -100,9 +128,11 @@ Deno.serve(async (request) => {
   const expiresAt = (row as { expires_at: string }).expires_at
   const invitationId = (row as { invitation_id: string }).invitation_id
 
-  const invitationUrl = appBaseUrl
-    ? `${appBaseUrl}/rejoindre?token=${encodeURIComponent(tokenPlain)}`
-    : null
+  // BLOC 11 : `SOFIA_APP_BASE_URL` absent -> on retombe sur l'URL de production
+  // connue au lieu de renvoyer un lien null (l'interface n'affichait alors qu'un
+  // jeton brut, sans lien partageable ni bouton WhatsApp).
+  const effectiveBaseUrl = appBaseUrl || 'https://sbc-ai-agency-dashbord.netlify.app'
+  const invitationUrl = `${effectiveBaseUrl}/rejoindre?token=${encodeURIComponent(tokenPlain)}`
 
   // Le jeton en clair n'est renvoyé qu'ici, une seule fois : la base ne stocke
   // que son empreinte sha256, il est donc irrécupérable ensuite.
@@ -113,6 +143,6 @@ Deno.serve(async (request) => {
     expires_at: expiresAt,
     role,
     seats: seatsInfo,
-    warning: appBaseUrl ? undefined : 'SOFIA_APP_BASE_URL non configuré : renvoyer le jeton brut.',
+    warning: appBaseUrl ? undefined : 'SOFIA_APP_BASE_URL non configuré : URL de production utilisée par repli.',
   }, 201)
 })

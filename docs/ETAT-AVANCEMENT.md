@@ -1005,3 +1005,189 @@ fonctionnel** après le retrait de `authenticated` (le job s'exécute en tant qu
 1. Rendre la suspension opposable côté base (triggers de limites + déclaration de paiement) — SQL prêt.
 2. Durcir `property_visits_delete_admin`, `property_visits_update_member` et `sales_pipeline_delete_member` (un agent peut aujourd'hui supprimer une visite et une opportunité).
 3. Nettoyer le bucket `bsfood` et ses 11 politiques `roles={public}` (étranger au projet).
+
+---
+
+# SESSION 2 — CORRECTIFS PRIORITAIRES, PARCOURS D'ABONNEMENT, RÔLE AGENT
+
+> Reprise après réinitialisation du sandbox : le checkout local était revenu à
+> `a02fc7b`. Tout le travail des blocs 1 à 10 était **sain et sauf sur le remote**
+> (`076df66`). HEAD a été réaligné par `git fetch` + `git reset --mixed FETCH_HEAD`
+> (l'arbre de travail est préservé) : **aucune perte**.
+> À noter aussi : `pnpm` et `node_modules` avaient disparu — réinstallés
+> (`corepack prepare pnpm@10.18.0 --activate` puis `pnpm install`).
+
+## SESSION 2 — BLOC 1 : BUGS BLOQUANTS (FAIT)
+
+### Bug 1 — Connexion admin : « rien ne se passe »
+
+**Vérifications faites avant de conclure** (la base était hors de cause) :
+- `platform_admins` contient bien `nabilayediango910@gmail.com`
+  (`b7e561f9-8872-4a27-addb-8dc0492e9b20`, rôle `platform_owner`, `status active`) ;
+- `is_platform_admin()` et `is_platform_owner()` renvoient `true` pour ce JWT ;
+- `mon_etat_compte()` renvoie `{"is_admin": true, "memberships": []}` ;
+- **test avec RLS réellement appliquée** (`SET LOCAL ROLE authenticated` +
+  revendications JWT) : lecture de `platform_admins` = 1 ligne, `user_profiles` =
+  1 ligne, RPC OK ;
+- config d'auth : `external_email_enabled: true`, `mailer_autoconfirm: true`,
+  `disable_signup: false`, `password_min_length: 6`.
+
+**Causes racines côté front — trois chemins silencieux dans `Login` :**
+1. **Écran statique « Session déjà ouverte ».** `signIn` déclenche
+   `onAuthStateChange`, donc `user` devient non nul **pendant** que `submit`
+   poursuit ses appels. `Login` se re-rendait alors sur un écran demandant de
+   *cliquer* un lien : sans clic, **rien ne se passait**.
+2. **Repli silencieux `catch { navigate('/dashboard') }`.** Si la lecture du rôle
+   échouait (incident réseau, RLS), un administrateur plateforme était envoyé vers
+   l'espace agence. Or il n'a **aucune adhésion** : `WorkspaceGate` affichait
+   « aucune agence » — écran sans rapport avec l'admin.
+3. **`signIn` peut renvoyer `null` sans lever d'erreur** : le `if (signedInUser)`
+   ne faisait alors **rien du tout**, sans message.
+
+**Correctifs** (`src/App.tsx`) :
+- Nouveau composant `PostLoginRedirect` : navigation **automatique** dès que le
+  rôle est connu, état de chargement explicite, et en cas d'échec un écran qui
+  affiche `getSupabaseErrorMessage(...)` **plus le code technique**, avec
+  « Réessayer » et deux liens forcés (`/admin`, `/dashboard`) pour ne jamais
+  rester bloqué.
+- Nouvel état `awaitingRedirect`, **prioritaire sur `if (user)`** : il empêche
+  `PostLoginRedirect` de partir vers `/admin` pendant que le contrôle « agence
+  suspendue » est encore en vol (sinon course entre les deux).
+- `signIn === null` → message explicite affiché.
+- Le `catch → /dashboard` est **supprimé** : la redirection passe par un seul
+  chemin, fondé sur le rôle réellement lu en base.
+- L'erreur de `getAccountState()` n'est plus avalée (`console.warn`).
+
+### Bugs 2 et 3 — Création d'un agent et lien d'invitation sans effet
+
+**Cause racine n°1 (trouvée au BLOC 10, déjà corrigée)** : `agence_active`
+n'existe que dans `saas_immobilier`, alors que `.rpc()` sans `.schema()` est résolu
+dans `public`. Comme le code testait `if (error || data !== true)`, une **erreur
+RPC était lue comme « agence suspendue »**, et le paramètre envoyé était
+`agency_id` au lieu de `p_agency_id`.
+
+**Cause racine n°2 (nouvelle, déterminante)** : les cinq Edge Functions
+importaient `../_shared/http.ts`. **Un déploiement fait par l'API Supabase
+(`create_edge_function` / `update_edge_function`) n'envoie que le fichier
+d'entrée `index.ts`** — confirmé par `list_edge_functions` : les fonctions
+déployées par l'API (`redeem-agency-invitation`, `reset-agent-password`,
+`dashboard-assistant`) n'ont ni `entrypoint_path` complet ni `ezbr_sha256`,
+contrairement à celles déployées au CLI (`create-platform-agency`,
+`provision-platform-agency`). Le module partagé manquait donc à l'artefact
+déployé : **la fonction échouait au chargement du module**, avant même d'exécuter
+la moindre ligne de métier.
+
+**Correctif** : les 12 lignes de `_shared/http.ts` (`corsHeaders`, `json`) sont
+**recopiées dans chaque fonction**. Plus aucune importation relative : chaque
+artefact déployé est autonome. `_shared/http.ts` est conservé pour un déploiement
+au CLI, qui téléverse toute l'arborescence.
+
+**Vérifications de la chaîne en base, avec le JWT du propriétaire**
+(`babergang009@gmail.com`, agence `sbc-demo`) :
+`has_agency_role(…, 'admin')` = **true** (la fonction traite bien `owner` comme
+`admin`) · `agence_active(…)` = **true** (le wrapper du BLOC 10 fonctionne) ·
+`agency_seat_availability(…)` = `{available: 2, seats_used: 1, seats_limit: 3}`.
+`create_agency_member` exige une ligne dans `user_profiles` : le trigger
+`on_auth_user_created_profile` → `public.handle_new_user_profile()` (SECURITY
+DEFINER, `postgres`) la crée bien à chaque `auth.admin.createUser`, et les 4
+comptes existants ont leurs 4 profils. **Aucun maillon base n'est en cause.**
+
+**Redéploiements** : `create-agency-member` **v6**, `invite-agency-member` **v5**,
+`redeem-agency-invitation` **v3** (`verify_jwt: false` **préservé** — la fonction
+est appelée par un agent qui n'a pas encore de compte).
+
+**Erreurs désormais explicites** (exigence « afficher le code et le message ») :
+chaque branche d'échec renvoie `details` (message Supabase brut) et `code`.
+L'erreur de contrôle du statut d'agence est **séparée** de la suspension :
+`agency_status_check_failed` (500) au lieu d'un `agency_suspended` (403) trompeur.
+Côté front, nouvelle classe `EdgeFunctionError` (`errorCode`, `details`,
+`technicalCode`, `httpStatus`) et `teamErrorLabel` les affiche. Une fonction qui
+ne démarre pas produit maintenant
+`edge_function_unavailable` **avec le message brut**, au lieu d'un objet opaque.
+
+**Secret manquant corrigé** : `SOFIA_APP_BASE_URL` était **absent**, donc
+`invite-agency-member` renvoyait `invitation_url: null` — l'interface retombait
+sur un jeton brut, sans lien partageable ni bouton WhatsApp. Secret posé sur
+`https://sbc-ai-agency-dashbord.netlify.app`, **et** repli codé sur cette même URL
+si le secret venait à disparaître.
+
+### Bug 4 — « Passer au Pro/Premium » sans effet
+
+**Causes racines :**
+1. **Le message de confirmation était rendu tout en bas de la page** (après
+   `PaymentSection`), alors que le bouton est dans le panneau « Modules » : au
+   moment du clic, le retour était **hors écran**. La demande partait bien, mais
+   l'utilisateur ne voyait rien.
+2. Aucun état d'envoi visible sur le bouton (seulement `disabled`).
+3. **L'agence ne pouvait jamais connaître le statut de sa demande** :
+   `plan_change_requests` n'était affiché nulle part côté agence.
+
+**Correctifs :**
+- `upgradeMessage` rendu **au niveau du bouton**, avec rôle `alert` et classe
+  `is-error` en cas d'échec, et le **code d'erreur** entre parenthèses.
+- Bouton : libellé « Envoi de la demande… » + `aria-busy` pendant l'appel.
+- Nouveau hook `usePlanChangeRequests` (`src/lib/plan-limits.ts`) +
+  `planChangeStatusLabel`. Clé de cache préfixée par `offre`, donc l'invalidation
+  déjà faite par `useRequestUpgrade` la couvre automatiquement.
+- Nouveau panneau **« Mes demandes de changement d'offre »** (`panel-plan-requests`) :
+  offre actuelle → offre demandée, statut (En attente / Approuvée / Refusée),
+  dates de demande et de traitement, et **le motif saisi par l'administrateur**.
+  Aucune modification de RLS : la politique SELECT `is_agency_member` existante
+  suffit.
+
+### Bug 5 — Bouton retour encore défaillant
+
+**Causes racines :**
+1. **`window.history.back()` était encore utilisé.** Dans une preview intégrée
+   (iframe), l'historique est partagé avec la page hôte : `history.back()` peut
+   remonter l'application **hôte** au lieu de la nôtre, ou ne rien faire si
+   l'iframe n'a qu'une entrée. Même symptôme sur un lien ouvert directement.
+2. **Boucle de redirection dans l'espace admin.** Sur `/admin`, le retour visait
+   `/dashboard`. Or `WorkspaceGate` contient déjà
+   `if (isAdmin && memberships.length === 0) return <Redirect to="/admin" />` :
+   un administrateur plateforme sans adhésion était **immédiatement renvoyé sur
+   `/admin`**. Bouton visible, effet nul.
+
+**Correctifs :**
+- `BackButton` n'appelle **plus jamais** l'historique du navigateur : navigation
+  exclusivement via wouter. Ordre de résolution : `to` imposé → **route interne
+  précédente** (retour naturel, respecte la profondeur) → **page parente** de la
+  carte (historique vide, lien direct). Reste donc toujours dans l'application.
+- Nouvelle prop `hidden`. `AdminShell` masque le retour sur `/admin` quand
+  `memberships.length === 0`, et masque aussi le lien « Espace agence » de la barre
+  latérale dans ce cas (même impasse).
+
+### Correctif transversal découvert en chemin — couches `z-index`
+Toutes les modales shadcn/Radix (`dialog`, `alert-dialog`, `sheet`, `drawer`) sont
+en `z-50`. Le bouton flottant de l'assistant (BLOC 8) était à **`z-index: 60`** et
+son panneau à **61** : ils passaient **au-dessus de chaque fenêtre modale** et
+interceptaient les clics sur les boutons d'action situés en bas à droite.
+→ Bouton flottant ramené à **30**, panneau à **31** (au-dessus du contenu et de la
+barre latérale à 20, **sous** les modales à 50). L'overlay modal couvrant tout
+l'écran, le bouton ne reçoit plus aucun clic tant qu'une modale est ouverte.
+`.public-back-row` passé de 50 à **40** pour la même raison.
+
+### Fichiers touchés
+`src/App.tsx` (PostLoginRedirect, awaitingRedirect, submit) · `src/components/back-button.tsx`
+(plus de `history.back()`, prop `hidden`) · `src/pages/admin/admin-shell.tsx`
+(`hasAgencySpace`) · `src/pages/my-offer.tsx` (retour inline + panneau de suivi) ·
+`src/lib/plan-limits.ts` (`usePlanChangeRequests`, `planChangeStatusLabel`) ·
+`src/lib/agency-team-api.ts` (`EdgeFunctionError`, `invoke`, libellés) ·
+`src/index.css` (z-index, `.plan-request-*`, `.state-actions`) ·
+`supabase/functions/{create-agency-member,invite-agency-member,redeem-agency-invitation,dashboard-assistant,reset-agent-password}/index.ts`
+(aucune importation relative).
+
+### Appliqué / déployé dans ce bloc
+- **Secret posé** : `SOFIA_APP_BASE_URL = https://sbc-ai-agency-dashbord.netlify.app`
+- **Redéployé** : `create-agency-member` v6 · `invite-agency-member` v5 ·
+  `redeem-agency-invitation` v3 (`verify_jwt: false` conservé)
+- **Aucune migration SQL, aucune RLS modifiée, aucune fonction SQL existante
+  modifiée dans ce bloc.**
+- `pnpm run typecheck` OK · `pnpm run build` OK
+
+### Non testé (pas de navigateur dans le sandbox)
+Les Edge Functions ne sont appelables qu'avec un vrai JWT : la création de membre,
+le lien d'invitation et le rachat via `/rejoindre` restent à valider par vous.
+Le diagnostic d'import manquant est une **déduction** fondée sur
+`list_edge_functions` (absence d'`entrypoint_path`/`ezbr_sha256` pour les fonctions
+déployées par l'API) ; l'inlining supprime le risque dans tous les cas de figure.

@@ -86,11 +86,45 @@ const errorLabels: Record<string, string> = {
   seat_check_failed: 'Le contrôle des places disponibles a échoué. Réessayez.',
   server_configuration_error: 'Configuration serveur incomplète. Contactez le support.',
   server_error: 'Erreur serveur. Réessayez.',
+  agency_status_check_failed: 'Le statut de l’agence n’a pas pu être vérifié. Réessayez.',
+  edge_function_unavailable: 'La fonction serveur n’a pas répondu. Réessayez ; si l’erreur persiste, contactez le support.',
   method_not_allowed: 'Méthode non autorisée.',
   invalid_json: 'Requête malformée.',
 };
 
+/**
+ * BLOC 11 — Erreur d'Edge Function porteuse du code métier ET du détail technique.
+ * Les fonctions renvoient désormais `{ error, details, code }` : l'interface peut
+ * afficher la cause exacte au lieu d'un message générique ou d'un échec muet.
+ */
+export class EdgeFunctionError extends Error {
+  readonly errorCode: string;
+  readonly details: string | null;
+  readonly technicalCode: string | null;
+  readonly httpStatus: number | null;
+
+  constructor(errorCode: string, details: string | null, technicalCode: string | null, httpStatus: number | null) {
+    super(errorCode);
+    this.name = 'EdgeFunctionError';
+    this.errorCode = errorCode;
+    this.details = details;
+    this.technicalCode = technicalCode;
+    this.httpStatus = httpStatus;
+  }
+}
+
 export function teamErrorLabel(error: unknown): string {
+  // BLOC 11 : libellé français + cause technique exacte, jamais un échec muet.
+  if (error instanceof EdgeFunctionError) {
+    const base = errorLabels[error.errorCode] ?? error.errorCode;
+    const parts: string[] = [base];
+    if (error.details) parts.push(`Détail : ${error.details}`);
+    const codes = [error.technicalCode, error.httpStatus ? `HTTP ${error.httpStatus}` : null]
+      .filter(Boolean)
+      .join(', ');
+    if (codes) parts.push(`(${codes})`);
+    return parts.join(' ');
+  }
   const candidate = error as { code?: string; message?: string } | null;
   const code = candidate?.code ?? candidate?.message ?? '';
   if (code && errorLabels[code]) return errorLabels[code];
@@ -100,6 +134,8 @@ export function teamErrorLabel(error: unknown): string {
   return message || 'Une erreur est survenue. Réessayez.';
 }
 
+type EdgeErrorPayload = { error?: string; details?: string | null; code?: string | null };
+
 async function invoke<T>(slug: string, body: Record<string, unknown>): Promise<T> {
   const client = getSupabaseClient();
   const { data, error } = await client.functions.invoke(slug, { body });
@@ -107,14 +143,26 @@ async function invoke<T>(slug: string, body: Record<string, unknown>): Promise<T
     // functions.invoke masque le corps de réponse ; on le récupère si possible.
     const context = (error as { context?: Response }).context;
     if (context) {
-      const payload = (await context.json().catch(() => null)) as { error?: string } | null;
-      if (payload?.error) throw new Error(payload.error);
+      const payload = (await context.json().catch(() => null)) as EdgeErrorPayload | null;
+      if (payload?.error) {
+        throw new EdgeFunctionError(payload.error, payload.details ?? null, payload.code ?? null, context.status);
+      }
     }
-    throw error;
+    // BLOC 11 : une fonction qui ne démarre pas (module manquant, erreur Deno)
+    // produit une FunctionsHttpError/FunctionsFetchError SANS corps exploitable.
+    // On le dit explicitement au lieu de remonter un objet opaque.
+    const name = (error as { name?: string }).name ?? '';
+    const raw = (error as { message?: string }).message ?? '';
+    throw new EdgeFunctionError(
+      'edge_function_unavailable',
+      raw || `La fonction « ${slug} » n'a pas pu être exécutée.`,
+      name || null,
+      (error as { context?: Response }).context?.status ?? null,
+    );
   }
-  const payload = data as { error?: string } & T;
+  const payload = data as EdgeErrorPayload & T;
   if (payload && typeof payload === 'object' && 'error' in payload && payload.error) {
-    throw new Error(payload.error);
+    throw new EdgeFunctionError(payload.error, payload.details ?? null, payload.code ?? null, null);
   }
   return payload;
 }

@@ -3653,7 +3653,15 @@ button.row-action.danger-action { color: var(--si-danger); }
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
   bottom: max(16px, env(safe-area-inset-bottom));
-  z-index: 60;
+  /* BLOC 11 (correctif bloquant) : les modales shadcn/Radix sont en `z-50`.
+     Le bouton flottant etait a 60 et son panneau a 61 : ils passaient DONC
+     AU-DESSUS de chaque fenetre modale et interceptaient les clics sur les
+     boutons d'action situes en bas a droite (creer un agent, generer un lien
+     d'invitation, « Passer au Pro »). On repasse sous la couche modale :
+     au-dessus du contenu et de la barre laterale (20), sous les modales (50).
+     L'overlay modal couvrant tout l'ecran, le bouton ne recoit plus aucun clic
+     tant qu'une modale est ouverte. */
+  z-index: 30;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3674,7 +3682,7 @@ button.row-action.danger-action { color: var(--si-danger); }
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
   bottom: max(84px, calc(env(safe-area-inset-bottom) + 84px));
-  z-index: 61;
+  z-index: 31; /* juste au-dessus du bouton, toujours sous les modales (50) */
   display: grid;
   gap: 12px;
   width: min(420px, calc(100vw - 2 * max(16px, env(safe-area-inset-left))));
@@ -3860,7 +3868,9 @@ button.row-action.danger-action { color: var(--si-danger); }
   position: fixed;
   top: max(10px, env(safe-area-inset-top));
   left: max(10px, env(safe-area-inset-left));
-  z-index: 50;
+  /* Sous les modales (z-50) et sous le toast (50) : meme regle que le bouton
+     flottant, pour ne jamais intercepter un clic destine a une fenetre. */
+  z-index: 40;
 }
 .public-back-row .back-button {
   background: color-mix(in srgb, var(--si-surface) 88%, transparent);
@@ -3902,3 +3912,39 @@ button.row-action.danger-action { color: var(--si-danger); }
   background: color-mix(in srgb, var(--si-gold-text, #ecc978) 20%, transparent);
   color: var(--si-gold-text, #ecc978);
 }
+
+/* =============================================================================
+   BLOC 11 — CORRECTIFS BLOQUANTS
+   ============================================================================= */
+
+/* --- Couches : le bouton flottant ne doit JAMAIS passer au-dessus d'une modale.
+   Les modales shadcn/Radix (dialog, alert-dialog, sheet, drawer) sont en `z-50`.
+   Le bouton d'assistant etait a 60 et son panneau a 61 : ils interceptaient les
+   clics sur les boutons d'action en bas a droite de chaque fenetre (creer un
+   agent, generer un lien d'invitation, « Passer au Pro »). */
+
+/* --- Suivi des demandes de changement d'offre (page Mon offre) -------------- */
+.plan-request-list { display: grid; gap: 9px; }
+.plan-request-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px 13px;
+  border-radius: 13px;
+  border: 1px solid var(--si-border);
+  border-left-width: 3px;
+  background: var(--si-surface-2);
+}
+.plan-request-row.is-pending { border-left-color: var(--si-gold); }
+.plan-request-row.is-approved { border-left-color: var(--si-success, #0f766e); }
+.plan-request-row.is-rejected { border-left-color: var(--si-danger); }
+.plan-request-head { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; justify-content: space-between; }
+.plan-request-head strong { font-size: 13.2px; }
+.plan-request-meta { margin: 0; font-size: 11.6px; color: var(--si-text-muted); }
+.plan-request-note { margin: 0; font-size: 12.4px; color: var(--si-text-soft, var(--si-text-muted)); line-height: 1.55; }
+.plan-request-note strong { color: var(--si-text); }
+.form-feedback.is-error { color: var(--si-danger); }
+
+/* --- Retour : cible tactile et etats --------------------------------------- */
+.back-button:disabled { opacity: .5; cursor: default; }
+.state-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
+.state-actions .button-link { min-height: 44px; }

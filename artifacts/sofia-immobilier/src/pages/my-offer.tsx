@@ -12,6 +12,8 @@ import {
 import { PaymentSection } from '@/components/payment-panel';
 // BLOC 7 : jauge « Utilisation IA ce mois » (lecture seule, quotas de l'offre).
 import { useAgencyAiUsage, compactNumber } from '@/lib/usage-api';
+// BLOC 11 (bug 4) : suivi des demandes de changement d'offre cote agence.
+import { usePlanChangeRequests, planChangeStatusLabel } from '@/lib/plan-limits';
 import { UsageGauge, WhatsAppBadge } from '@/components/usage-gauge';
 import { whatsappStatusLabel } from '@/lib/usage-api';
 import { useAgency } from '@/lib/agency-context';
@@ -156,7 +158,13 @@ export default function MyOfferPage() {
   const aiUsage = useAgencyAiUsage(activeAgencyId);
   const plans = useAllPlans();
   const requestChange = useRequestPlanChange(activeAgencyId);
+  // BLOC 11 (bug 4) : les demandes de l'agence et leur statut reel en base.
+  const planRequests = usePlanChangeRequests(activeAgencyId);
   const [notice, setNotice] = useState('');
+  // Message rendu AU NIVEAU DU BOUTON : avant, le seul retour etait affiche tout
+  // en bas de la page, hors ecran au moment du clic -> « rien ne se passe ».
+  const [upgradeMessage, setUpgradeMessage] = useState('');
+  const [upgradeFailed, setUpgradeFailed] = useState(false);
 
   // BLOC 10 (roles) : « Mon offre » regroupe l'abonnement, les declarations de
   // paiement et la consommation. Reserve au proprietaire et aux administrateurs.
@@ -191,17 +199,31 @@ export default function MyOfferPage() {
   const catalog = Array.from(new Set((plans.data ?? []).flatMap((row) => row.modules ?? [])));
   const locked = catalog.filter((key) => !included.has(key));
   const upgrades = (plans.data ?? []).filter((row) => row.price_monthly > plan.price_monthly);
+  // BLOC 11 : index des offres par id, pour nommer les demandes de changement.
+  const plansById = new Map((plans.data ?? []).map((row) => [row.id, row]));
 
   const askUpgrade = async (target: PlanRow) => {
     setNotice('');
+    setUpgradeMessage('');
+    setUpgradeFailed(false);
     try {
       await requestChange.mutateAsync({
         planId: target.id,
         note: `Demande depuis la page Mon offre : passage de ${plan.display_name} à ${target.display_name}.`,
       });
+      // BLOC 11 : message AU NIVEAU DU BOUTON, avec le code d'erreur exact en cas
+      // d'echec (plus jamais de bouton qui ne fait rien).
+      setUpgradeMessage(
+        `Demande de passage à ${target.display_name} envoyée à l’administrateur. Elle apparaît ci-dessous avec son statut.`,
+      );
       setNotice(`Demande de passage à ${target.display_name} envoyée à l’administrateur.`);
     } catch (error) {
-      setNotice(getSupabaseErrorMessage(error, 'envoyer la demande'));
+      const code = (error as { code?: string })?.code;
+      setUpgradeFailed(true);
+      setUpgradeMessage(
+        `${getSupabaseErrorMessage(error, 'envoyer la demande')}${code ? ` (code ${code})` : ''}`,
+      );
+      setNotice('');
     }
   };
 
@@ -402,16 +424,96 @@ export default function MyOfferPage() {
                     className="button-link"
                     onClick={() => void askUpgrade(target)}
                     disabled={requestChange.isPending}
+                    aria-busy={requestChange.isPending}
                     data-testid={`button-upgrade-${target.name}`}
                   >
-                    <Sparkles size={14} /> Passer au {target.display_name}
+                    <Sparkles size={14} />
+                    {requestChange.isPending && requestChange.variables?.planId === target.id
+                      ? ' Envoi de la demande…'
+                      : ` Passer au ${target.display_name}`}
                   </button>
                 ))}
               </div>
+              {upgradeMessage && (
+                <p
+                  className={`form-feedback${upgradeFailed ? ' is-error' : ''}`}
+                  role={upgradeFailed ? 'alert' : 'status'}
+                  data-testid="status-upgrade-request"
+                >
+                  {upgradeMessage}
+                </p>
+              )}
             </div>
           )}
         </section>
       </div>
+
+      {/* BLOC 11 (bug 4) — SUIVI DES DEMANDES DE CHANGEMENT D'OFFRE.
+          L'agence voit enfin l'etat reel de sa demande : en attente, approuvee,
+          ou refusee AVEC le motif saisi par l'administrateur. */}
+      <section className="panel" data-testid="panel-plan-requests">
+        <div className="panel-head">
+          <div>
+            <h2>Mes demandes de changement d’offre</h2>
+            <p>État réel enregistré par la plateforme</p>
+          </div>
+          <Sparkles size={18} />
+        </div>
+
+        {planRequests.isLoading ? (
+          <LoadingRows label="Chargement des demandes" />
+        ) : planRequests.error ? (
+          <p className="form-feedback is-error" role="alert" data-testid="status-plan-requests-error">
+            {getSupabaseErrorMessage(planRequests.error, 'charger les demandes')}
+            {(planRequests.error as { code?: string })?.code
+              ? ` (code ${(planRequests.error as { code?: string }).code})`
+              : ''}
+          </p>
+        ) : (planRequests.data ?? []).length === 0 ? (
+          <p className="privacy-note-text" data-testid="status-plan-requests-empty">
+            Aucune demande pour l’instant. Utilisez « Passer au Pro/Premium »
+            ci-dessus : votre demande part à l’administrateur, qui peut
+            l’approuver ou la refuser avec un motif.
+          </p>
+        ) : (
+          <div className="plan-request-list">
+            {(planRequests.data ?? []).map((row) => {
+              const requested = plansById.get(row.requested_plan_id);
+              const current = row.current_plan_id ? plansById.get(row.current_plan_id) : undefined;
+              const statusClass =
+                row.status === 'approved' ? 'is-approved' : row.status === 'rejected' ? 'is-rejected' : 'is-pending';
+              return (
+                <article className={`plan-request-row ${statusClass}`} key={row.id} data-testid={`row-plan-request-${row.status}`}>
+                  <div className="plan-request-head">
+                    <strong>
+                      {current ? `${current.display_name ?? current.name} → ` : ''}
+                      {requested?.display_name ?? requested?.name ?? 'Offre demandée'}
+                    </strong>
+                    <span className={`declaration-status ${statusClass}`} data-testid={`badge-plan-request-${row.status}`}>
+                      {planChangeStatusLabel(row.status)}
+                    </span>
+                  </div>
+                  <p className="plan-request-meta">
+                    Demandée le {dateLabel(row.created_at)}
+                    {row.handled_at ? ` · traitée le ${dateLabel(row.handled_at)}` : ''}
+                  </p>
+                  {row.handle_note && (
+                    <p className="plan-request-note" data-testid="display-plan-request-note">
+                      <strong>Motif de l’administrateur :</strong> {row.handle_note}
+                    </p>
+                  )}
+                  {row.status === 'pending' && (
+                    <p className="plan-request-note">
+                      Votre demande est en attente. L’administrateur peut demander un
+                      paiement avant validation : consultez la section ci-dessous.
+                    </p>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* BLOC 1 : déclaration de paiement manuel (Orange Money / Wave) et
           suivi de l'état des déclarations de l'agence. */}

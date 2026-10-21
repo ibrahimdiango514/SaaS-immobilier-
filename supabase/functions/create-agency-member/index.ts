@@ -9,7 +9,29 @@
 //     (invitations en attente comprises, via agency_seat_availability)
 //   - agency_id jamais cru sur parole : vérifié côté serveur par has_agency_role
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { corsHeaders, json } from '../_shared/http.ts'
+// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
+// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
+// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
+// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
+// présent dans l'artefact déployé, et la fonction échouait au chargement du
+// module — d'où une création de membre et un lien d'invitation qui ne
+// produisaient rien côté navigateur.
+// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
+// est désormais AUTONOME, sans aucune importation relative.
+// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
+// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
 
 const allowedRoles = new Set(['admin', 'agent'])
 const MIN_PASSWORD_LENGTH = 8
@@ -70,15 +92,22 @@ Deno.serve(async (request) => {
     target_agency_id: agencyId,
     required_role: 'admin',
   })
-  if (allowedError || allowed !== true) return json({ error: 'agency_admin_or_owner_required' }, 403)
+  if (allowedError || allowed !== true) {
+    return json({ error: 'agency_admin_or_owner_required', details: allowedError?.message ?? null }, 403)
+  }
 
   // 3. Agence non suspendue
+  // BLOC 11 : l'erreur RPC exacte est desormais renvoyee dans `details`, pour ne
+  // plus jamais confondre « agence suspendue » et « appel technique en echec ».
   // BLOC 10 : `agence_active` attend `p_agency_id` (et non `agency_id`), et
   // PostgREST résout le RPC dans `public` — d'où le wrapper public.agence_active.
   // Avec l'ancien nom de paramètre l'appel échouait toujours et la fonction
   // renvoyait `agency_suspended` pour TOUTE agence, même active.
   const { data: active, error: activeError } = await callerClient.rpc('agence_active', { p_agency_id: agencyId })
-  if (activeError || active !== true) return json({ error: 'agency_suspended' }, 403)
+  if (activeError) {
+    return json({ error: 'agency_status_check_failed', details: activeError.message, code: activeError.code ?? null }, 500)
+  }
+  if (active !== true) return json({ error: 'agency_suspended' }, 403)
 
   // 4. Limite d'utilisateurs non atteinte (membres actifs + invitations en attente)
   const { data: seats, error: seatsError } = await callerClient.rpc('agency_seat_availability', {
@@ -108,7 +137,10 @@ Deno.serve(async (request) => {
   if (createError || !created.user?.id) {
     const message = createError?.message?.toLowerCase() ?? ''
     const taken = message.includes('already') || message.includes('registered') || message.includes('exists')
-    return json({ error: taken ? 'email_already_exists' : 'auth_user_creation_failed' }, taken ? 409 : 502)
+    return json({
+      error: taken ? 'email_already_exists' : 'auth_user_creation_failed',
+      details: createError?.message ?? 'aucun utilisateur renvoyé',
+    }, taken ? 409 : 502)
   }
 
   // 6. Rattachement à l'agence — UNIQUEMENT cette agence
@@ -129,6 +161,7 @@ Deno.serve(async (request) => {
     return json({
       error: limit ? 'member_limit_reached' : 'agency_member_provisioning_failed',
       details: membershipError.message,
+      code: membershipError.code ?? null,
     }, limit ? 409 : 500)
   }
 

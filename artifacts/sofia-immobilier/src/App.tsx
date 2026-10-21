@@ -928,6 +928,65 @@ const loginSchema = z.object({
 });
 type LoginFormValues = z.infer<typeof loginSchema>;
 
+/**
+ * BLOC 11 (bug bloquant 1) — Redirection automatique apres connexion.
+ *
+ * Avant : `Login` affichait un ecran STATIQUE « Session deja ouverte » avec un
+ * simple lien a cliquer. Comme `signIn` declenche `onAuthStateChange` (donc
+ * `user` devient non nul) PENDANT que `submit` poursuit ses appels, le
+ * formulaire etait remplace par cet ecran : sans clic de l'utilisateur, rien ne
+ * se passait. Pire, tant que le role n'etait pas charge, le lien pointait vers
+ * `/dashboard` — un administrateur plateforme (qui n'a AUCUNE adhesion agence)
+ * arrivait donc sur l'espace agence et son ecran « aucune agence ».
+ *
+ * Apres : la navigation est automatique des que le role est connu, avec un etat
+ * de chargement explicite et l'erreur exacte affichee si la lecture du role
+ * echoue (jamais de repli silencieux vers /dashboard).
+ */
+function PostLoginRedirect() {
+  const { user } = useAuth();
+  const roleQ = usePlatformRole(user?.id);
+  const [, navigate] = useLocation();
+  const isAdmin = Boolean(roleQ.data?.isAdmin);
+  const settled = !roleQ.isPending && !roleQ.isLoading;
+
+  useEffect(() => {
+    if (!settled || roleQ.error) return;
+    navigate(isAdmin ? '/admin' : '/dashboard', { replace: true });
+  }, [settled, roleQ.error, isAdmin, navigate]);
+
+  if (roleQ.error) {
+    return (
+      <div className="auth-loading">
+        <div className="state-card error-state">
+          <div className="state-icon"><ShieldCheck size={19} /></div>
+          <h2>Impossible de déterminer votre rôle</h2>
+          <p data-testid="status-post-login-role-error">
+            {getSupabaseErrorMessage(roleQ.error, 'vérifier votre rôle')}
+          </p>
+          <p className="form-hint">
+            Détail technique : {(roleQ.error as { code?: string })?.code ?? 'aucun code renvoyé'}
+          </p>
+          <div className="state-actions">
+            <button type="button" className="button-link" onClick={() => roleQ.refetch()} data-testid="button-retry-role">
+              Réessayer
+            </button>
+            <Link href="/admin" className="button-link" data-testid="link-force-admin">Ouvrir la console d’administration</Link>
+            <Link href="/dashboard" className="button-link" data-testid="link-force-dashboard">Ouvrir l’espace agence</Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="auth-loading">
+      <div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div>
+      <LoadingRows label="Ouverture de votre espace selon votre rôle" />
+    </div>
+  );
+}
+
 function Login() {
   const { user, signIn, signOut, configurationError, initializationError } = useAuth();
   const [, navigate] = useLocation();
@@ -943,45 +1002,62 @@ function Login() {
     return flagged;
   });
   const [busy, setBusy] = useState(false);
+  // BLOC 11 : vrai tant que la verification post-connexion est en cours. Cet
+  // etat a la priorite sur `if (user)` : il empeche PostLoginRedirect de partir
+  // vers /admin pendant que le controle d'agence suspendue est encore en vol.
+  const [awaitingRedirect, setAwaitingRedirect] = useState(false);
   const submit = async (values: LoginFormValues) => {
     setError('');
     setBlockedNotice(false);
     setBusy(true);
     try {
       const signedInUser = await signIn(values.email, values.password);
-      if (signedInUser) {
-        // Statut de l'agence vérifié AVANT tout accès au dashboard.
-        try {
-          const account = await getAccountState();
-          if (isBlockedAccount(account)) {
-            sessionStorage.setItem(SESSION_BLOCK_KEY, '1');
-            await Promise.resolve(signOut()).catch(() => undefined);
-            sessionStorage.removeItem(SESSION_BLOCK_KEY);
-            setBlockedNotice(true);
-            return;
-          }
-        } catch {
-          // Statut momentanément illisible : les gardes de routes revérifient.
-        }
-        // Redirection selon le rôle lu dans Supabase : admin → /admin, agence → /dashboard.
-        try {
-          const role = await getPlatformRole(signedInUser.id);
-          navigate(role.isAdmin ? '/admin' : '/dashboard', { replace: true });
-        } catch {
-          navigate('/dashboard', { replace: true });
-        }
+      // BLOC 11 : `signIn` peut renvoyer null sans lever d'erreur. Avant, ce cas
+      // ne produisait AUCUN message et AUCUNE navigation : bouton sans effet.
+      if (!signedInUser) {
+        setError(
+          'Supabase a accepté la connexion mais n’a renvoyé aucun utilisateur. ' +
+          'Rechargez la page et réessayez ; si le problème persiste, contactez l’administrateur.',
+        );
+        return;
       }
+      // Statut de l'agence vérifié AVANT tout accès au dashboard.
+      try {
+        const account = await getAccountState();
+        if (isBlockedAccount(account)) {
+          sessionStorage.setItem(SESSION_BLOCK_KEY, '1');
+          await Promise.resolve(signOut()).catch(() => undefined);
+          sessionStorage.removeItem(SESSION_BLOCK_KEY);
+          setBlockedNotice(true);
+          return;
+        }
+      } catch (accountError) {
+        // Statut momentanément illisible : les gardes de routes revérifient.
+        // On ne bloque pas la connexion, mais l'erreur n'est plus avalée.
+        console.warn('etat_du_compte_illisible', accountError);
+      }
+      // La redirection est portée par PostLoginRedirect dès que la session est
+      // propagée : un seul chemin, fondé sur le rôle réellement lu en base.
+      // Avant, un `catch { navigate('/dashboard') }` envoyait silencieusement un
+      // administrateur plateforme vers l'espace agence au moindre incident réseau.
+      setAwaitingRedirect(true);
     } catch (e) {
       setError(getSupabaseErrorMessage(e, 'ouvrir une session'));
     } finally {
       setBusy(false);
     }
   };
-  if (user) {
-    const destination = roleQ.data?.isAdmin ? '/admin' : '/dashboard';
-    const destinationLabel = roleQ.data?.isAdmin ? 'Continuer vers la console d’administration' : 'Continuer vers l’espace agence';
-    return <div className="auth-loading"><div className="state-card"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Session déjà ouverte</h2><p>Votre compte est déjà connecté à Sofia Immobilier.</p><Link href={destination} className="text-action" data-testid="link-continue-workspace">{destinationLabel} <ArrowRight size={14} /></Link></div></div>;
+  if (awaitingRedirect) {
+    return (
+      <div className="auth-loading">
+        <div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div>
+        <LoadingRows label="Connexion réussie — vérification de votre compte et de votre rôle" />
+      </div>
+    );
   }
+  // BLOC 11 : session deja ouverte -> redirection AUTOMATIQUE selon le role,
+  // et non plus un ecran statique attendant un clic.
+  if (user) return <PostLoginRedirect />;
   // BLOC 9 : page publique -> retour vers l'accueil, cible 44 px, visible sur mobile.
   return <div className="login-page"><div className="public-back-row"><BackButton to="/" label="Retour à l’accueil" testId="button-back-login" /></div><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
     <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="vous@agence.ml" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />

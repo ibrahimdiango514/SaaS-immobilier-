@@ -180,3 +180,74 @@ export function pickUpgradeTarget(
   );
   return morePhotos ?? higher[0];
 }
+
+/* --------------------------------------------------------------------------- */
+/* BLOC 11 (bug 4) — SUIVI DES DEMANDES DE CHANGEMENT D'OFFRE CÔTÉ AGENCE       */
+/* --------------------------------------------------------------------------- */
+/* Avant ce correctif, `request_plan_change` envoyait bien la demande mais       */
+/* l'agence n'avait AUCUN retour : le seul message était rendu tout en bas de la */
+/* page « Mon offre », hors écran au moment du clic. L'agence ne pouvait donc    */
+/* jamais savoir si sa demande était en attente, approuvée ou refusée (et avec   */
+/* quel motif). La table `plan_change_requests` est déjà lisible par les membres */
+/* de l'agence (politique SELECT `is_agency_member`) : aucune modification de    */
+/* RLS n'est nécessaire.                                                        */
+/* --------------------------------------------------------------------------- */
+
+export type PlanChangeRequestStatus = 'pending' | 'approved' | 'rejected' | string;
+
+export interface PlanChangeRequestRow {
+  id: string;
+  agency_id: string;
+  requested_plan_id: string;
+  current_plan_id: string | null;
+  requested_by: string | null;
+  note: string | null;
+  status: PlanChangeRequestStatus;
+  handled_by: string | null;
+  handled_at: string | null;
+  handle_note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Libellé français du statut d'une demande. */
+export function planChangeStatusLabel(status: PlanChangeRequestStatus): string {
+  switch (status) {
+    case 'pending':
+      return 'En attente de validation';
+    case 'approved':
+      return 'Approuvée';
+    case 'rejected':
+      return 'Refusée';
+    default:
+      return status || 'Inconnue';
+  }
+}
+
+/**
+ * Clé préfixée par `offre` : l'invalidation déjà faite par `useRequestUpgrade`
+ * (`queryKey: ['offre']`) la couvre automatiquement.
+ */
+export const getPlanChangeRequestsQueryKey = (agencyId?: string) =>
+  ['offre', 'demandes-changement', agencyId ?? 'none'] as const;
+
+/** Demandes de changement d'offre de l'agence, plus récente d'abord. */
+export function usePlanChangeRequests(agencyId?: string) {
+  return useQuery({
+    queryKey: getPlanChangeRequestsQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    staleTime: 15_000,
+    queryFn: async (): Promise<PlanChangeRequestRow[]> => {
+      const { data, error } = await db()
+        .from('plan_change_requests')
+        .select(
+          'id, agency_id, requested_plan_id, current_plan_id, requested_by, note, status, handled_by, handled_at, handle_note, created_at, updated_at',
+        )
+        .eq('agency_id', agencyId as string)
+        .order('created_at', { ascending: false })
+        .limit(25);
+      if (error) throw error;
+      return (data ?? []) as unknown as PlanChangeRequestRow[];
+    },
+  });
+}

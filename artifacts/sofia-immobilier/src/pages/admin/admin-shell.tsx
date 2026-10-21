@@ -28,6 +28,7 @@ import { getSupabaseErrorMessage } from '@/lib/supabase';
 // BLOC 9 : en-tête mobile admin + retour déterministe entre espaces.
 import { BackButton } from '@/components/back-button';
 import { trackRoute } from '@/lib/back-navigation';
+import { useAgency } from '@/lib/agency-context';
 import { BrandMark } from '@/lib/workspace-ui';
 import { ThemeToggle } from '@/lib/theme';
 
@@ -135,6 +136,13 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   const pendingBilling =
     Number(queuesQ.data?.totals?.pending_declarations ?? 0) +
     Number(queuesQ.data?.totals?.pending_plan_changes ?? 0);
+  // BLOC 11 (bug 5) : un administrateur plateforme sans adhesion agence n'a PAS
+  // d'espace agence a rejoindre. `WorkspaceGate` contient deja
+  // `if (isAdmin && memberships.length === 0) return <Redirect to="/admin" />` :
+  // le bouton « retour vers l'espace agence » le renvoyait donc immediatement ici,
+  // d'ou un bouton visible mais sans AUCUN effet. On le masque dans ce cas.
+  const { memberships } = useAgency();
+  const hasAgencySpace = memberships.length > 0;
   const badges: Record<string, number> = { pendingBilling };
   // BLOC 9 : journal des routes internes.
   useEffect(() => { trackRoute(path); }, [path]);
@@ -188,9 +196,11 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           <div className="connection-heading"><i /> Session administrateur</div>
           <p>Accès global en lecture/écriture via les politiques RLS « platform admin ».</p>
         </div>
-        <Link href="/dashboard" className="sidebar-signout" data-testid="link-admin-to-dashboard">
-          <Home size={14} /> Espace agence
-        </Link>
+        {hasAgencySpace && (
+          <Link href="/dashboard" className="sidebar-signout" data-testid="link-admin-to-dashboard">
+            <Home size={14} /> Espace agence
+          </Link>
+        )}
         <button className="sidebar-signout" onClick={() => void handleSignOut()} data-testid="button-admin-sign-out">
           <LogOut size={14} /> Se déconnecter
         </button>
@@ -203,7 +213,13 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           </button>
           {/* BLOC 9 : sur une sous-page -> vue d'ensemble admin ; sur /admin
               -> retour à l'espace agence. Repli déterministe, cible 44 px. */}
-          <BackButton space="admin" variant="desktop" icon={ArrowLeft} testId="button-admin-back" />
+          <BackButton
+            space="admin"
+            variant="desktop"
+            icon={ArrowLeft}
+            testId="button-admin-back"
+            hidden={path === '/admin' && !hasAgencySpace}
+          />
           <div className="breadcrumb">
             <Link href="/admin" className="breadcrumb-home"><ShieldCheck size={12} /> Administration</Link>
             <ArrowRight size={12} />
@@ -228,7 +244,12 @@ export default function AdminShell({ children }: { children: ReactNode }) {
             supérieure est masquée) : plus de flèche de retour, plus de menu, plus
             de déconnexion sur téléphone et dans les previews. */}
         <header className="mobile-header admin-mobile-header">
-          <BackButton space="admin" variant="mobile" testId="button-admin-mobile-back" />
+          <BackButton
+            space="admin"
+            variant="mobile"
+            testId="button-admin-mobile-back"
+            hidden={path === '/admin' && !hasAgencySpace}
+          />
           <div className="mobile-brand">
             <strong>{adminNav.find((item) => (item.exact ? path === item.href : path.startsWith(item.href)))?.label ?? 'Administration'}</strong>
           </div>

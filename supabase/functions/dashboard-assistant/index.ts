@@ -28,7 +28,29 @@
 // `public.record_ai_usage()` (rôle service_role).
 // =============================================================================
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { corsHeaders, json } from '../_shared/http.ts'
+// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
+// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
+// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
+// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
+// présent dans l'artefact déployé, et la fonction échouait au chargement du
+// module — d'où une création de membre et un lien d'invitation qui ne
+// produisaient rien côté navigateur.
+// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
+// est désormais AUTONOME, sans aucune importation relative.
+// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
+// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
 
 const SCHEMA = 'saas_immobilier'
 const MODEL = 'llama-3.3-70b-versatile'

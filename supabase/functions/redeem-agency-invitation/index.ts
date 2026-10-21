@@ -12,7 +12,29 @@
 //   (c) limitation de tentatives par jeton ET par adresse IP, côté base.
 //   (d) longueur minimale de mot de passe imposée.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { corsHeaders, json } from '../_shared/http.ts'
+// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
+// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
+// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
+// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
+// présent dans l'artefact déployé, et la fonction échouait au chargement du
+// module — d'où une création de membre et un lien d'invitation qui ne
+// produisaient rien côté navigateur.
+// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
+// est désormais AUTONOME, sans aucune importation relative.
+// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
+// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
 
 const MIN_PASSWORD_LENGTH = 8
 
@@ -64,7 +86,7 @@ Deno.serve(async (request) => {
   })
   if (attemptError) {
     console.error('rate_limit_check_failed', { message: attemptError.message })
-    return json({ error: 'server_error' }, 500)
+    return json({ error: 'server_error', details: attemptError.message }, 500)
   }
   if (!(attempt as { allowed: boolean }).allowed) {
     return json({ error: 'too_many_attempts', retry_after_minutes: 60 }, 429)
@@ -74,7 +96,7 @@ Deno.serve(async (request) => {
   const { data: statusData, error: statusError } = await admin.rpc('agency_invitation_status', {
     p_token: token,
   })
-  if (statusError) return json({ error: 'server_error' }, 500)
+  if (statusError) return json({ error: 'server_error', details: statusError.message }, 500)
 
   const status = statusData as { state: string; agency_name?: string; role?: string; _agency_id?: string }
 
@@ -92,7 +114,7 @@ Deno.serve(async (request) => {
   const { data: seats, error: seatsError } = await admin.rpc('agency_seat_availability', {
     p_agency_id: agencyId,
   })
-  if (seatsError) return json({ error: 'server_error' }, 500)
+  if (seatsError) return json({ error: 'server_error', details: seatsError.message }, 500)
   const seatsInfo = seats as { available: number; is_unlimited: boolean }
   if (!seatsInfo.is_unlimited && seatsInfo.available <= 0) {
     return json({ error: 'member_limit_reached' }, 409)
@@ -108,7 +130,10 @@ Deno.serve(async (request) => {
   if (createError || !created.user?.id) {
     const message = createError?.message?.toLowerCase() ?? ''
     const taken = message.includes('already') || message.includes('registered') || message.includes('exists')
-    return json({ error: taken ? 'email_already_exists' : 'account_creation_failed' }, taken ? 409 : 502)
+    return json({
+      error: taken ? 'email_already_exists' : 'account_creation_failed',
+      details: createError?.message ?? 'aucun utilisateur renvoyé',
+    }, taken ? 409 : 502)
   }
 
   // 4. Rachat du jeton : le marque utilisé ET crée l'adhésion, de façon atomique.
@@ -124,7 +149,11 @@ Deno.serve(async (request) => {
       compensation_failed: Boolean(compensationError),
     })
     const limit = redeemError.message?.includes('imite')
-    return json({ error: limit ? 'member_limit_reached' : 'invitation_redeem_failed' }, limit ? 409 : 500)
+    return json({
+      error: limit ? 'member_limit_reached' : 'invitation_redeem_failed',
+      details: redeemError.message,
+      code: redeemError.code ?? null,
+    }, limit ? 409 : 500)
   }
 
   // 5. Aucune session créée ici : l'agent se reconnecte avec l'email et le mot
