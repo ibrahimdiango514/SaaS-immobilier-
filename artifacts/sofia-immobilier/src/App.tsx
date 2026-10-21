@@ -44,6 +44,9 @@ import { AgencyLogo } from '@/lib/workspace-ui';
 import { AgencyLogoCard } from '@/components/agency-logo-card';
 // BLOC 6 : archivage et suppression d'un bien (autorisations tranchees cote serveur).
 import { ArchivedPropertiesPanel, PropertyLifecyclePanel } from '@/components/property-lifecycle';
+// BLOC 8 : assistant IA (bouton flottant), resume du jour et alertes intelligentes.
+import { AssistantFab } from '@/components/assistant-fab';
+import { DailySummaryCard, SmartAlertsCard } from '@/components/smart-alerts';
 // BLOC 4 : tracé précis des modifications des informations de l'agence.
 import { diffAgencyFields, traceAgencySettingsChange } from '@/lib/agency-activity';
 import { ThemeToggle } from '@/lib/theme';
@@ -177,6 +180,8 @@ function AppShell({ children }: { children: ReactNode }) {
         {path !== '/dashboard' && <button type="button" className="icon-button mobile-back" onClick={() => { if (window.history.length > 1) window.history.back(); else window.location.assign('/dashboard'); }} aria-label="Retour" title="Retour" data-testid="button-mobile-back"><ChevronLeft size={20} /></button>}
         <div className="mobile-brand"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={26} testId="display-mobile-agency-logo" /><strong>{activeAgency?.name ?? 'sofia immobilier'}</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">{children}</main>
+      {/* BLOC 8 : assistant IA accessible depuis tout l'espace agence. */}
+      <AssistantFab />
     </div>
     {notice && <div className="notice-toast" role={signOutError ? 'alert' : 'status'} data-testid="status-notifications">{signOutError || 'Action effectuée.'}<button onClick={() => setNotice('')} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
   </div>;
@@ -300,6 +305,8 @@ function Overview() {
   const relatedClosed = new Set((pipeline.data ?? []).filter((o) => ['sold', 'rented'].includes((properties.data ?? []).find((p) => p.id === o.property_id)?.status ?? '')).map((o) => o.id)).size;
   const conversion = (pipeline.data ?? []).length ? `${((relatedClosed / (pipeline.data ?? []).length) * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %` : 'Données insuffisantes';
   return <><Heading eyebrow="Votre activité" title="Vue d’ensemble" description="Les repères essentiels de votre agence, à jour et accessibles." /><section className="status-banner" data-testid="status-dashboard-access"><div className="status-banner-icon"><ShieldCheck size={15} /></div><div><strong>Votre espace de travail est synchronisé</strong><p>Les indicateurs ci-dessous reflètent les données actuellement accessibles pour votre agence.</p></div><span className="status-tag">Accès actif</span></section>
+    {/* BLOC 8 : resume du jour (assistant IA, a la demande) et alertes calculees. */}
+    <div className="insight-grid"><DailySummaryCard /><SmartAlertsCard /></div>
     <section className="stat-grid stat-grid-eight" aria-label="Indicateurs de l’agence">{stats.map(({ label, count, foot, icon: Icon }, i) => <article className="stat-card" key={label} data-testid={`card-stat-${i + 1}`}><div className="stat-top"><span>{label}</span><span className="stat-icon"><Icon size={14} /></span></div><div className="stat-value" data-testid={`value-stat-${i + 1}`}>{count}</div><div className="stat-foot">{foot}</div></article>)}</section>
 
     <section className="panel revenue-overview-panel" data-testid="panel-ca-dashboard">

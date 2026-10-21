@@ -402,3 +402,99 @@ l'écran affiche « Aucune offre active » et des jauges non plafonnées.
 variante nœud Postgres (avec `set_config('request.jwt.claims', …)` puisque le
 claim de rôle n'existe pas en connexion directe), idempotence par `event_key`,
 format de réponse, exploitation de `quota_exceeded`, et table de dépannage.
+
+## BLOC 8 — ASSISTANT IA DU TABLEAU DE BORD : FAIT ET DÉPLOYÉ (clé Groq à poser)
+
+### Edge Function `dashboard-assistant` DÉPLOYÉE
+Projet `xbuuhfwobrafcbgtdgjx`, version 1, **`verify_jwt = true`**,
+id `71a0653e-cd9b-4282-9eff-ad3464571c87`. Source :
+`supabase/functions/dashboard-assistant/index.ts`.
+
+Chaîne de contrôles, dans l'ordre (tout côté serveur) :
+1. appelant authentifié via son JWT ;
+2. **agence DÉDUITE DU JWT** (membership actif). Aucun `agency_id` du navigateur
+   n'est lu. Multi-agences : choix déterministe (rôle le plus élevé, puis
+   adhésion la plus ancienne) et l'agence retenue est renvoyée dans la réponse ;
+3. agence **non suspendue** (`agence_active` + `agencies.status`) ;
+4. offre **Pro ou Premium** (`agency_current_plan`, `name ∈ {pro, enterprise}`) ;
+5. **quota mensuel de tokens IA non atteint** (`agency_ai_usage` → `alerts.ai_tokens`) ;
+6. **limite par utilisateur et par minute** = 8 messages, comptée **en base**
+   (`usage_events` où `event_type='assistant_message'` sur 60 s glissantes) donc
+   fiable entre les isolats Deno — pas une variable mémoire ;
+7. **longueur maximale** du message = 1 200 caractères ; historique borné à
+   8 messages de 600 caractères.
+
+### Données : outils en lecture seule, exécutés AVEC le JWT utilisateur
+Aucun SQL libre — la liste des requêtes est figée dans la fonction. La RLS
+s'applique donc à chaque outil, et l'assistant ne peut pas voir une autre agence.
+`biens`, `contacts`, `pipeline`, `visites`, `offre_et_consommation` pour tous ;
+**`chiffre_affaires` et `abonnement` uniquement pour owner/admin** (un agent
+n'obtient rien, et la règle 9 du prompt système le lui fait dire).
+
+Corrections apportées après vérification du schéma réel (les colonnes attendues
+n'existaient pas toutes) :
+- `sales_pipeline` porte **`etape`, `probabilite`, `date_visite`** et **aucun
+  montant** → la valeur est déduite du prix du bien lié (`properties(...)`
+  embarqué) et pondérée par la probabilité ;
+- `property_visits` n'a **pas de date planifiée** (seulement `visited_at`) →
+  les visites à venir viennent de **`appointments.start_at`**, et
+  `property_visits` sert aux visites enregistrées / sans compte rendu ;
+- `agency_billing_state` renvoie `has_due_date, sub_status, ends_at, days_to_due,
+  grace_days, is_due_soon, is_overdue, is_past_grace, in_valid_trial` (pas de
+  `plan_name` ni `agency_status`) — l'outil utilise ces clés exactes.
+
+### Modèle et sécurité du prompt
+- Modèle **Groq `llama-3.3-70b-versatile`**, `temperature 0.2`, `max_tokens 700`.
+- Clé dans le secret **`GROQ_API_KEY`** (jamais dans le code, jamais dans le
+  navigateur). Sans ce secret : réponse `assistant_not_configured` (503).
+- Prompt système en français : lecture seule stricte, chiffres uniquement issus
+  du bloc `DONNÉES`, « Je ne dispose pas de cette information » sinon, 4 à 8
+  lignes, suggestion d'action finale.
+- **Anti-injection** : les textes des fiches (titres, descriptions, notes,
+  messages clients) sont placés dans un bloc délimité `<<<DEBUT_DONNEES>>>` /
+  `<<<FIN_DONNEES>>>` et la règle 5 interdit de les traiter comme des consignes.
+  Ils sont aussi tronqués (`clip`, 240 caractères) pour limiter la surface.
+- Les tokens sont enregistrés via `public.record_ai_usage()` (service_role) avec
+  `event_key = assistant:<uuid>` → idempotent.
+
+### Front
+- `src/lib/assistant-api.ts` : `askAssistant`, `askDailySummary`,
+  `assistantErrorLabel` (17 codes traduits), `assistantErrorCode`,
+  `useAssistantAccess` (garde d'affichage Pro/Premium), suggestions.
+- `src/components/assistant-chat.tsx` : fil de discussion, suggestions, compteur
+  de caractères, état « réflexion… », **transparence** (outils utilisés + tokens
+  affichés sous chaque réponse), rappel « lecture seule » permanent.
+- `src/pages/assistant.tsx` **réécrit** : l'ancien assistant par mots-clés côté
+  client est remplacé par le vrai assistant. Offre insuffisante → **aperçu
+  verrouillé** (questions réelles, réponses floutées), bénéfices, et bouton
+  **« Passer au Pro/Premium »** (`request_plan_change`, owner/admin uniquement)
+  + lien « Voir mon offre ».
+- `src/components/assistant-fab.tsx` : **bouton flottant** monté dans `AppShell`,
+  panneau mobile-first (pleine largeur et safe-area sous 640 px, cible 56 px,
+  fermeture par Échap / clic extérieur / croix 44 px). Offre non éligible → le
+  panneau affiche un cadenas et renvoie vers l'aperçu.
+- `src/components/smart-alerts.tsx` :
+  - `SmartAlertsCard` — **alertes intelligentes CALCULÉES** (aucun token
+    consommé, disponibles pour toutes les offres) : biens sans photo, prospects
+    sans suivi depuis 7 jours, rendez-vous à venir, échéance d'abonnement
+    proche/dépassée, limites presque atteintes (biens 80 %, utilisateurs 80 %,
+    photos, tokens IA 80 %/100 %). Chaque alerte a un libellé, un détail chiffré
+    et un lien vers l'écran concerné. État « Rien à signaler » sinon.
+  - `DailySummaryCard` — **« Résumé du jour »** sur la vue d'ensemble, généré
+    **à la demande** (jamais au chargement, pour ne pas brûler le quota),
+    avec heure de génération, bouton « Régénérer », et variante verrouillée
+    « Débloquer avec l'offre Pro ».
+- `pnpm run typecheck` OK · `pnpm run build` OK.
+
+### ⚠️ À FAIRE PAR VOUS — poser la clé Groq (ne la donnez jamais dans le chat)
+```bash
+supabase secrets set GROQ_API_KEY=<votre_clé_groq> --project-ref xbuuhfwobrafcbgtdgjx
+```
+Vérification : `supabase secrets list --project-ref xbuuhfwobrafcbgtdgjx`
+Tant que ce secret est absent, l'assistant répond
+`assistant_not_configured` → « L'assistant n'est pas encore configuré côté
+serveur ». Tout le reste de l'application fonctionne normalement.
+
+### Non testable depuis le sandbox
+Le sandbox ne joint pas `*.supabase.co` : la fonction déployée ne peut être
+exercée que depuis un navigateur. Voir la liste de tests manuels en fin de document.
