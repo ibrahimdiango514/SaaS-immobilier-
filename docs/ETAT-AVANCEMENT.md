@@ -217,3 +217,30 @@ Autres écritures en base :
 - La limite reste appliquée **côté base** par le trigger `enforce_photo_limit`
   (aucune fonction existante modifiée).
 - `pnpm run typecheck` OK · `pnpm run build` OK.
+
+## BLOC 4 — INFORMATIONS DE L'AGENCE ET LOGO : FAIT
+
+- `src/lib/agency-logo.ts` (nouveau) : PNG/JPG/WebP uniquement, **2 Mo maximum**
+  (message avec le poids réel), **redimensionné à 512 px** en conservant le ratio
+  et la transparence (WebP), repli sur une qualité plus basse puis sur l'original
+  si le canvas 2D n'est pas disponible.
+  `useUploadAgencyLogo` (envoi + `agencies.logo_url` + compensation Storage en cas
+  d'échec de l'UPDATE) et `useDeleteAgencyLogo` (fichier + colonne remise à `null`).
+  Chemin imposé par les politiques existantes `agency_assets_*` :
+  `agencies/<agency_id>/<uuid>-<nom>` dans le bucket public `agency-assets`.
+- `src/components/agency-logo-card.tsx` : aperçu 92 px, « Remplacer le logo »,
+  « Supprimer le logo » (avec confirmation), contraintes affichées, états occupés,
+  et **encart lecture seule pour un agent** (la RLS `agencies_update_admin` refuse
+  déjà l'écriture — le bouton n'est simplement pas proposé).
+- Carte intégrée aux Paramètres (`SettingsPage`), après « Informations de l'agence ».
+- `AgencyLogo` (`lib/workspace-ui.tsx`) : logo ou initiale en repli (y compris si le
+  fichier ne se charge pas). Affiché dans **la barre latérale** (sélecteur d'agence),
+  **l'en-tête** (fil d'Ariane desktop + en-tête mobile) et la **fiche Agence**.
+- Traçabilité : le trigger `activity_log_agencies` journalise déjà chaque UPDATE ;
+  `src/lib/agency-activity.ts` ajoute une entrée précise listant les champs réellement
+  changés (`diffAgencyFields` + `traceAgencySettingsChange`), et le logo écrit
+  « Logo de l'agence mis à jour / supprimé » avec le chemin Storage et le poids.
+  Un échec de journalisation ne bloque jamais l'action.
+- Onboarding aligné sur les mêmes règles (avant : SVG accepté, 3 Mo).
+- `pnpm run typecheck` OK · `pnpm run build` OK. Aucune migration nécessaire
+  (`agencies.logo_url` et le bucket `agency-assets` existent déjà).

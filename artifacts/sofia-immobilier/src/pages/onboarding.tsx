@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useAuth } from '@/lib/auth-context';
+// BLOC 4 : regles logo partagees (PNG/JPG/WebP, 2 Mo).
+import { validateLogoFile } from '@/lib/agency-logo';
 import { useAgency } from '@/lib/agency-context';
 import { useCreateAgency } from '@/lib/data-hooks';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
@@ -194,7 +196,7 @@ export default function OnboardingPage() {
                 <div className="onboarding-step">
                   <span className="form-kicker">Étape 3 sur 4</span>
                   <h1>Présentez votre agence</h1>
-                  <p>Logo (JPG, PNG, WebP ou SVG — 3 Mo max.) et description courte.</p>
+                  <p>Logo (JPG, PNG ou WebP — 2 Mo max., redimensionné automatiquement) et description courte.</p>
                   <div className="logo-picker">
                     {logoPreview ? (
                       <div className="logo-preview">
@@ -207,12 +209,14 @@ export default function OnboardingPage() {
                       <label className="upload-control">
                         <input
                           type="file"
-                          accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                          accept="image/jpeg,image/png,image/webp"
                           onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            if (file.size > 3 * 1024 * 1024) {
-                              setFormError('Le logo pèse 3 Mo maximum.');
+                            // BLOC 4 : mêmes règles que les Paramètres.
+                            const invalid = validateLogoFile(file);
+                            if (invalid) {
+                              setFormError(invalid);
                               e.currentTarget.value = '';
                               return;
                             }

@@ -25,6 +25,8 @@ import type {
   WhatsAppConnectionRow,
 } from './database.types';
 import { getSupabaseClient, getSupabaseErrorMessage } from './supabase';
+// BLOC 4 : preparation et chemins du logo d'agence (partage avec les Parametres).
+import { AGENCY_ASSETS_BUCKET, logoObjectPath, prepareLogo } from './agency-logo';
 
 const db = () => getSupabaseClient().schema('saas_immobilier');
 
@@ -1295,19 +1297,6 @@ export function useTrackPropertyView(agencyId?: string, propertyId?: string) {
 /* Inscription d’agence (onboarding)                                   */
 /* ------------------------------------------------------------------ */
 
-function sanitizeLogoFileName(name: string) {
-  return (
-    name
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^A-Za-z0-9._-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'logo'
-  );
-}
-
-const MAX_LOGO_SIZE = 3 * 1024 * 1024;
-const SUPPORTED_LOGO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml']);
 
 export function useCreateAgency() {
   const queryClient = useQueryClient();
@@ -1330,15 +1319,11 @@ export function useCreateAgency() {
       const agency = data as unknown as AgencyRow;
 
       if (input.logo && agency?.id) {
-        const file = input.logo;
-        if (!SUPPORTED_LOGO_TYPES.has(file.type)) {
-          throw new Error('Le logo doit être une image JPG, PNG, WebP ou SVG.');
-        }
-        if (file.size > MAX_LOGO_SIZE) {
-          throw new Error('Le logo pèse 3 Mo maximum.');
-        }
-        const objectPath = `agencies/${agency.id}/logo-${crypto.randomUUID()}-${sanitizeLogoFileName(file.name)}`;
-        const storage = getSupabaseClient().storage.from('agency-assets');
+        // BLOC 4 : mêmes règles partout (PNG/JPG/WebP, 2 Mo, redimensionné à
+        // 512 px) — voir lib/agency-logo.ts.
+        const file = await prepareLogo(input.logo);
+        const objectPath = logoObjectPath(agency.id, file.name);
+        const storage = getSupabaseClient().storage.from(AGENCY_ASSETS_BUCKET);
         const { error: uploadError } = await storage.upload(objectPath, file, {
           cacheControl: '3600',
           contentType: file.type,

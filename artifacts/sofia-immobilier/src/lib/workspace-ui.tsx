@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ArrowRight, RefreshCw, FileText, LockKeyhole, ShieldCheck, Building2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
@@ -88,6 +88,49 @@ export function BrandMark() {
     <div className="brand-mark" aria-hidden="true">
       <Building2 size={18} />
     </div>
+  );
+}
+
+/**
+ * BLOC 4 : logo de l'agence, affiché dans la barre latérale et l'en-tête.
+ * Retombe sur l'initiale du nom (ou l'icône par défaut) quand aucun logo n'est
+ * enregistré, et sur l'initiale si le fichier ne se charge pas.
+ */
+export function AgencyLogo({
+  logoUrl,
+  name,
+  size = 34,
+  className = '',
+  testId = 'agency-logo',
+}: {
+  logoUrl?: string | null;
+  name?: string | null;
+  size?: number;
+  className?: string;
+  testId?: string;
+}) {
+  const [broken, setBroken] = useState(false);
+  const initial = (name ?? 'S').trim().charAt(0).toUpperCase() || 'S';
+  const showImage = Boolean(logoUrl) && !broken;
+  return (
+    <span
+      className={`agency-logo${className ? ` ${className}` : ''}`}
+      style={{ width: size, height: size }}
+      data-testid={testId}
+    >
+      {showImage ? (
+        <img
+          src={logoUrl as string}
+          alt={name ? `Logo de ${name}` : 'Logo de l’agence'}
+          width={size}
+          height={size}
+          loading="lazy"
+          onError={() => setBroken(true)}
+        />
+      ) : (
+        <span className="agency-logo-fallback" aria-hidden="true">{initial}</span>
+      )}
+    </span>
   );
 }
 
