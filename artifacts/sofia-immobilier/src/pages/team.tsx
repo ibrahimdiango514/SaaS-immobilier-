@@ -8,9 +8,7 @@ import {
   Check, Copy, KeyRound, Link2, LockKeyhole, MessageCircle, RotateCcw, ShieldCheck,
   UserPlus, UserRound, UserX, UsersRound, X,
 } from 'lucide-react';
-import {
-  ButtonPrimary, ErrorState, Heading, LoadingRows, roleNames, useSafeRetry,
-} from '@/lib/workspace-ui';
+import { ButtonPrimary, ErrorState, Heading, LoadingRows, roleNames, useSafeRetry, safeFormat } from '@/lib/workspace-ui';
 import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 import {
@@ -370,7 +368,7 @@ export default function TeamPage() {
                 ? <CopyField label="Lien d’invitation" value={invitation.invitation_url} testId="text-invitation-url" />
                 : <CopyField label="Jeton d’invitation" value={invitation.token} testId="text-invitation-token" />}
               <p className="privacy-note-text">
-                Ce lien ne sera plus affiché : la base n’en conserve que l’empreinte. Expire le {new Date(invitation.expires_at).toLocaleString('fr-FR')}.
+                Ce lien ne sera plus affiché : la base n’en conserve que l’empreinte. Expire le {safeFormat(invitation.expires_at, { dateStyle: 'medium', timeStyle: 'short' })}.
               </p>
               {invitation.invitation_url && (
                 <a

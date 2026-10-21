@@ -42,7 +42,7 @@ import { compressImages } from '@/lib/image-tools';
 // BLOC 3 : compteur de photos et decoupe des envois multiples selon l'offre.
 import { formatQuota, splitByPhotoQuota, usePhotoQuota } from '@/lib/plan-limits';
 import { PhotoQuotaBar } from '@/components/photo-quota';
-import { AgencyLogo } from '@/lib/workspace-ui';
+import { AgencyLogo, formatDate, parseDate } from '@/lib/workspace-ui';
 import { AgencyLogoCard } from '@/components/agency-logo-card';
 // BLOC 6 : archivage et suppression d'un bien (autorisations tranchees cote serveur).
 import { ArchivedPropertiesPanel, PropertyLifecyclePanel } from '@/components/property-lifecycle';
@@ -111,7 +111,9 @@ const roleNames: Record<string, string> = { owner: 'Propriétaire', admin: 'Admi
 const propertyStatus: Record<string, string> = { available: 'Disponible', reserved: 'Réservé', sold: 'Vendu', rented: 'Loué', unavailable: 'Indisponible', draft: 'Brouillon', archived: 'Archivé' };
 const contactStatus: Record<string, string> = { lead: 'Nouveau contact', prospect: 'Prospect', client: 'Client', inactive: 'Inactif' };
 const cash = (price: number, currency: string) => `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(price)} ${currency === 'XOF' ? 'FCFA' : currency}`;
-const dateLabel = (value?: string | null) => value ? new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(value)) : 'Non renseignée';
+// NOTE : cette copie locale levait `RangeError: Invalid time value` sur une valeur
+// non vide mais invalide. Elle délègue désormais à formatDate() (parseDate sûr).
+const dateLabel = (value?: string | null) => formatDate(value);
 
 function BrandMark() { return <div className="brand-mark" aria-hidden="true"><Building2 size={18} /></div>; }
 

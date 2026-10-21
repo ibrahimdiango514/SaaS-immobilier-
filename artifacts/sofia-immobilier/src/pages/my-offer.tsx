@@ -6,9 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, Building2, Check, ImageIcon, Lock, Sparkles, UsersRound,
 } from 'lucide-react';
-import {
-  ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel,
-} from '@/lib/workspace-ui';
+import { ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel, formatDateTimeShort, safeFormat } from '@/lib/workspace-ui';
 import { PaymentSection } from '@/components/payment-panel';
 // BLOC 7 : jauge « Utilisation IA ce mois » (lecture seule, quotas de l'offre).
 import { useAgencyAiUsage, compactNumber } from '@/lib/usage-api';
@@ -279,7 +277,7 @@ export default function MyOfferPage() {
               <h2>Utilisation IA ce mois</h2>
               <p>
                 {aiUsage.data?.period_start
-                  ? `Période du ${new Date(aiUsage.data.period_start).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}`
+                  ? `Période du ${safeFormat(aiUsage.data.period_start, { month: 'long', year: 'numeric' })}`
                   : 'Période en cours'}
                 {' · '}alerte à 80 % puis à 100 % du quota de votre offre.
               </p>
@@ -358,7 +356,7 @@ export default function MyOfferPage() {
                         <small>
                           Dernière activité :{' '}
                           {connection.last_activity_at
-                            ? new Date(connection.last_activity_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })
+                            ? formatDateTimeShort(connection.last_activity_at)
                             : 'jamais'}
                           {aiUsage.data?.plan.max_whatsapp_connections != null && (
                             <> · {aiUsage.data.whatsapp.length}/{aiUsage.data.plan.max_whatsapp_connections} canal(aux) inclus</>

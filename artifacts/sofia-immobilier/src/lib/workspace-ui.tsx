@@ -65,23 +65,127 @@ export const entityLabels: Record<string, string> = {
 export const cash = (price: number, currency: string) =>
   `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(price)} ${currency === 'XOF' ? 'FCFA' : currency}`;
 
-export const dateLabel = (value?: string | null) =>
-  value
-    ? new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(
-        new Date(value),
-      )
-    : 'Non renseignée';
+/**
+ * Analyse une date sans JAMAIS lever d'exception.
+ *
+ * Pourquoi : `new Intl.DateTimeFormat(...).format(new Date(chaine))` lève
+ * `RangeError: Invalid time value` dès que la chaîne n'est pas une date
+ * valide. C'est exactement ce qui cassait la vue d'ensemble admin : le RPC
+ * `platform_subscription_revenue` renvoie `month_start` en **timestamptz**
+ * (`"2026-10-01T00:00:00+00:00"`), et le code concaténait `T12:00:00` dessus,
+ * ce qui donnait `"2026-10-01T00:00:00+00:00T12:00:00"` → `Invalid Date`.
+ *
+ * Formats acceptés : `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, ISO complet (avec ou sans
+ * fuseau), et toute chaîne déjà comprise par `Date`. Les dates « nues » sont
+ * interprétées à MIDI LOCAL pour éviter le décalage d'un mois/jour dû au fuseau.
+ */
+export function parseDate(value?: string | null): Date | null {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
 
-export const dateTimeLabel = (value?: string | null) =>
-  value
-    ? new Intl.DateTimeFormat('fr-FR', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }).format(new Date(value))
-    : 'Non renseignée';
+  // `YYYY-MM` seul : Date l'interprète mal, on complète explicitement.
+  const yearMonth = /^(\d{4})-(\d{2})$/.exec(raw);
+  if (yearMonth) {
+    const date = new Date(Number(yearMonth[1]), Number(yearMonth[2]) - 1, 1, 12, 0, 0);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  // `YYYY-MM-DD` sans heure : midi LOCAL (et non minuit UTC) pour rester sur le
+  // bon jour quel que soit le fuseau de l'utilisateur.
+  const bareDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (bareDate) {
+    const date = new Date(
+      Number(bareDate[1]), Number(bareDate[2]) - 1, Number(bareDate[3]), 12, 0, 0,
+    );
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  // ISO complet (déjà horodaté / avec fuseau) : ne RIEN concaténer.
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Vrai si la valeur donne une date exploitable. */
+export const isValidDateValue = (value?: string | null) => parseDate(value) !== null;
+
+const MISSING_DATE_LABEL = 'Non renseignée';
+
+/** Formate une date ; renvoie un libellé de repli au lieu de lever. */
+export function formatDate(value: string | Date | null | undefined, fallback = MISSING_DATE_LABEL): string {
+  const date = value instanceof Date ? value : parseDate(value);
+  if (!date) return fallback;
+  try {
+    return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+  } catch {
+    return fallback;
+  }
+}
+
+/** Formate une date + heure ; renvoie un libellé de repli au lieu de lever. */
+export function formatDateTime(value: string | Date | null | undefined, fallback = MISSING_DATE_LABEL): string {
+  const date = value instanceof Date ? value : parseDate(value);
+  if (!date) return fallback;
+  try {
+    return new Intl.DateTimeFormat('fr-FR', {
+      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    }).format(date);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Libellé court d'un mois (« oct. ») à partir de n'importe quel format de date.
+ * C'est le correctif direct du bug de la vue d'ensemble admin.
+ */
+export function monthShortLabel(value: string | Date | null | undefined, fallback = '—'): string {
+  const date = value instanceof Date ? value : parseDate(value);
+  if (!date) return fallback;
+  try {
+    return new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(date).replace('.', '');
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Formateur générique qui ne lève JAMAIS.
+ * Remplace les `new Date(chaine).toLocaleString(...)` dispersés dans l'app,
+ * qui lèvent `RangeError: Invalid time value` sur une chaîne non vide mais
+ * invalide. Renvoie `fallback` dans ce cas.
+ */
+export function safeFormat(
+  value: string | number | Date | null | undefined,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = MISSING_DATE_LABEL,
+  locale = 'fr-FR',
+): string {
+  if (value === null || value === undefined || value === '') return fallback;
+  const date = value instanceof Date ? value : (typeof value === 'number' ? new Date(value) : parseDate(value));
+  if (!date) return fallback;
+  try {
+    return new Intl.DateTimeFormat(locale, options).format(date);
+  } catch {
+    return fallback;
+  }
+}
+
+/** Date courte « 21/10/2026 ». */
+export const formatDateShort = (value?: string | null, fallback = MISSING_DATE_LABEL) =>
+  safeFormat(value, { day: '2-digit', month: '2-digit', year: 'numeric' }, fallback);
+
+/** Date + heure courtes « 21/10/2026 14:30 ». */
+export const formatDateTimeShort = (value?: string | null, fallback = MISSING_DATE_LABEL) =>
+  safeFormat(value, { dateStyle: 'short', timeStyle: 'short' }, fallback);
+
+/** Heure seule « 14:30 ». */
+export const formatTime = (value?: string | number | null, fallback = '--:--') =>
+  safeFormat(value, { hour: '2-digit', minute: '2-digit' }, fallback);
+
+export const dateLabel = (value?: string | null) => formatDate(value);
+
+export const dateTimeLabel = (value?: string | null) => formatDateTime(value);
 
 export function BrandMark() {
   return (

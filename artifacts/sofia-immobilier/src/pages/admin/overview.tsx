@@ -44,7 +44,7 @@ import { useSubscriptionRevenue } from '@/lib/admin-billing-api';
 import { Button } from '@/components/ui/button';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
-import { LoadingRows, cash, dateLabel, dateTimeLabel, downloadCsv } from '@/lib/workspace-ui';
+import { LoadingRows, cash, dateLabel, dateTimeLabel, downloadCsv, monthShortLabel } from '@/lib/workspace-ui';
 
 const CHART_COLORS = ['#0f766e', '#14b8a6', '#f59e0b', '#64748b', '#e11d48', '#8b5cf6', '#0ea5e9'];
 
@@ -53,7 +53,7 @@ function monthKey(date: Date) {
 }
 
 function monthLabel(date: Date) {
-  return new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(date);
+  return monthShortLabel(date);
 }
 
 export default function AdminOverviewPage() {
@@ -519,7 +519,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     () =>
       (revenue?.months ?? []).map((month) => ({
         key: month.month_start,
-        label: new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(new Date(`${month.month_start}T12:00:00`)).replace('.', ''),
+        label: monthShortLabel(month.month_start),
         revenus: Number(month.revenue ?? 0),
         payantes: Number(month.paying_agencies ?? 0),
       })),

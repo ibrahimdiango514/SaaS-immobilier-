@@ -15,7 +15,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { AdminHeading } from './admin-shell';
-import { LoadingRows, downloadCsv } from '@/lib/workspace-ui';
+import { LoadingRows, downloadCsv, formatDateTimeShort } from '@/lib/workspace-ui';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { UsageGauge, WhatsAppBadge } from '@/components/usage-gauge';
 import {
@@ -299,7 +299,7 @@ export default function AdminUsagePage() {
                     </td>
                     <td>
                       {row.whatsapp_last_activity_at
-                        ? new Date(row.whatsapp_last_activity_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })
+                        ? formatDateTimeShort(row.whatsapp_last_activity_at)
                         : '—'}
                     </td>
                   </tr>

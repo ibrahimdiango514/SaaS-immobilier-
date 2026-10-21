@@ -14,6 +14,7 @@
 // offres Pro/Premium, avec aperçu verrouillé sinon.
 // =============================================================================
 import { useEffect, useMemo, useState } from 'react';
+import { safeFormat } from '@/lib/workspace-ui';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import {
@@ -176,7 +177,7 @@ export function useSmartAlerts(agencyId?: string) {
         id: 'upcoming-visits',
         level: 'info',
         label: `${upcoming.length} rendez-vous à venir`,
-        detail: `Prochain : ${new Date(next.start_at).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+        detail: `Prochain : ${safeFormat(next.start_at, { dateStyle: 'medium', timeStyle: 'short' })}.`,
         href: '/visites',
         cta: 'Voir l’agenda',
         icon: CalendarDays,

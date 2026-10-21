@@ -13,6 +13,7 @@
 // intact le CA et l'historique.
 // =============================================================================
 import { useState } from 'react';
+import { formatDateShort } from '@/lib/workspace-ui';
 import {
   Archive, ArchiveRestore, AlertTriangle, ChevronLeft, LockKeyhole, Trash2,
 } from 'lucide-react';
@@ -139,7 +140,7 @@ export function PropertyLifecyclePanel({
         <div className="notice-box" role="status" data-testid="status-property-archived">
           <Archive size={15} />
           <span>
-            Bien archivé{property.archived_at ? ` le ${new Date(property.archived_at).toLocaleDateString('fr-FR')}` : ''}.
+            Bien archivé{property.archived_at ? ` le ${formatDateShort(property.archived_at)}` : ''}.
             Il reste compté dans l’historique et le chiffre d’affaires, et ne compte plus dans la limite de biens de votre offre.
           </span>
         </div>

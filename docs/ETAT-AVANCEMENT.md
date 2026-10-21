@@ -1670,3 +1670,83 @@ supabase functions deploy reset-agent-password --project-ref xbuuhfwobrafcbgtdgj
    opposable côté base dans les triggers de limites, durcissement de
    `property_visits`/`sales_pipeline` (devenu sans objet pour la suppression,
    puisque c'est maintenant voulu), et nettoyage du bucket étranger `bsfood`.
+
+---
+
+## SESSION 2 — CORRECTIF « Invalid time value » (2026-10-21)
+
+### Erreur signalée
+`RangeError: Invalid time value` affichée plein écran (attrapée par `ErrorBoundary`).
+
+### Cause racine — CONFIRMÉE EN BASE
+`pages/admin/overview.tsx:522` construisait le libellé de mois du graphe de revenus :
+
+```ts
+new Intl.DateTimeFormat('fr-FR', { month: 'short' })
+  .format(new Date(`${month.month_start}T12:00:00`))
+```
+
+Le code supposait que `month_start` est une **date nue** (`"2026-10-01"`). Or le RPC
+`public.platform_subscription_revenue` le renvoie en **`timestamptz`**. Interrogé avec le
+compte admin réel (`b7e561f9-8872-4a27-addb-8dc0492e9b20`), il renvoie :
+
+```json
+{ "revenue": 50000, "month_start": "2026-10-01T00:00:00+00:00", "payments_count": 1, "paying_agencies": 1 }
+```
+
+La concaténation donnait donc `"2026-10-01T00:00:00+00:00T12:00:00"` → **`Invalid Date`**
+→ `Intl.DateTimeFormat.format()` lève `RangeError: Invalid time value`.
+
+**Reproduit hors navigateur** (Node 22, `--experimental-strip-types`) :
+
+```
+new Date("2026-10-01T00:00:00+00:00T12:00:00") = Invalid Date
+format() → RangeError: Invalid time value   ← ERREUR AFFICHÉE
+```
+
+**Pourquoi maintenant ?** Cette section (`SubscriptionsOverviewSection`) est la vue
+d'ensemble **admin**. L'admin ne parvenait plus à se connecter (bug 1 du BLOC 1) : depuis
+que la connexion est réparée, cette page s'affiche pour la première fois et le bug apparaît.
+
+### Faiblesse sous-jacente (même classe de bug)
+`dateLabel()` / `dateTimeLabel()` ne protégeaient que contre `null`/`''`, **pas** contre une
+chaîne non vide mais non analysable. Un `null` renvoyait « Non renseignée » ; une chaîne
+invalide faisait planter l'écran entier.
+
+### Correction
+1. **`lib/workspace-ui.tsx`** — nouveau socle de dates qui ne lève jamais :
+   - `parseDate(value)` → `Date | null`. Gère `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, ISO complet
+     avec/sans fuseau. Les dates nues sont placées à **midi local** (évite le décalage de
+     jour/mois selon le fuseau). Retourne `null` si `Number.isNaN(getTime())`.
+   - `safeFormat(value, options, fallback, locale)` — formateur générique, `try/catch`.
+   - `formatDate`, `formatDateTime`, `formatDateShort`, `formatDateTimeShort`, `formatTime`,
+     `monthShortLabel`, `isValidDateValue`.
+   - `dateLabel` / `dateTimeLabel` **conservés** (mêmes signatures) mais délèguent aux
+     versions sûres → aucun appelant à modifier, et tous deviennent immunisés.
+2. **`pages/admin/overview.tsx`** — le site du bug : `monthShortLabel(month.month_start)`
+   (plus aucune concaténation) ; le `monthLabel()` local délègue aussi.
+3. **`App.tsx`** — la copie locale de `dateLabel` (ligne 114) délègue à `formatDate()`.
+4. **`toLocale*` bruts convertis** (même risque, valeurs non protégées) :
+   `pages/team.tsx` (`expires_at`), `components/property-lifecycle.tsx` (`archived_at`),
+   `components/smart-alerts.tsx` (`next.start_at`), `pages/admin/usage.tsx`
+   (`whatsapp_last_activity_at`), `pages/my-offer.tsx` (`last_activity_at`, `period_start`).
+
+### Vérifié
+- `pnpm run typecheck` ✅ · `pnpm run build` ✅ (8,5 s)
+- **Comportement réel testé** sur les 7 formats, avec la valeur exacte de la base :
+
+| entrée | avant | après |
+|---|---|---|
+| `2026-10-01T00:00:00+00:00` (le bug) | `RangeError` | `oct` / `1 oct. 2026` |
+| `2026-10-01` | ok | `oct` / `1 oct. 2026` |
+| `2026-10` | **`Invalid Date`** | `oct` / `1 oct. 2026` |
+| `2026-10-21T14:32:05.123Z` | ok | `oct` / `21 oct. 2026` |
+| `pas-une-date` | **`RangeError`** | `—` / `Non renseignée` |
+| `''` · `null` | repli | repli (inchangé) |
+
+- Aperçu : HMR a rechargé les 7 fichiers sans erreur.
+
+### Aucun changement en base
+Correctif **100 % frontend** : ni migration, ni RLS, ni Edge Function redéployée.
+Le RPC `platform_subscription_revenue` est inchangé (son type de retour était simplement
+mal interprété par le client).
