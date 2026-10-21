@@ -136,7 +136,9 @@ function AppShell({ children }: { children: ReactNode }) {
   // suffit pas : les routes sont aussi gardees (voir RequireManager ci-dessous).
   // BLOC 3 : l'offre de l'agence decide du menu, des routes, des boutons.
   const moduleAccess = useActiveModuleAccess();
-  const agentHiddenRoutes = ['/equipe', '/mon-offre'];
+  // BLOC 4 (session 2) : l'agent n'a acces ni a l'Equipe, ni a Mon offre
+  // (paiements, offre, consommation), ni aux Parametres de l'agence.
+  const agentHiddenRoutes = ['/equipe', '/mon-offre', '/parametres'];
   const visibleNav = isAgentOnly ? nav.filter((item) => !agentHiddenRoutes.includes(item.href)) : nav;
   // BLOC 9 : journal des routes internes -> le bouton retour ne sort jamais de l'app.
   useEffect(() => { trackRoute(path); }, [path]);
@@ -852,8 +854,15 @@ function PropertyDetailPage() {
   const photoQuota = usePhotoQuota(activeAgencyId, media.data?.length ?? 0);
   const uploadBatch = useUploadPropertyMediaBatch(activeAgencyId);
   const reorder = useReorderPropertyMedia(activeAgencyId, id);
-  const canDelete = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
-  const removeMedia = useDeletePropertyMedia(activeAgencyId, id, canDelete);
+  // BLOC 4 (session 2) : l'agent retrouve la suppression de PHOTOS. La politique
+  // `property_media_delete_member` autorise tout membre de l'agence.
+  // En revanche l'archivage et la suppression du BIEN restent réservés au
+  // propriétaire et à l'administrateur d'agence : la politique
+  // `properties_delete_admin` (has_agency_role 'admin') l'impose côté base.
+  const canManageProperty = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
+  const canDeletePhotos = Boolean(activeMembership);
+  const canDelete = canDeletePhotos;
+  const removeMedia = useDeletePropertyMedia(activeAgencyId, id, canDeletePhotos);
   const trackView = useTrackPropertyView(activeAgencyId, id);
   const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState(false);
@@ -925,7 +934,7 @@ function PropertyDetailPage() {
       </section></div>
     <div className="related-record"><h2>Fiche du bien</h2><span>Créé le {dateLabel(item.created_at)}</span></div>
     {/* BLOC 6 : archivage (CA conserve) et suppression (photos purgees, impact chiffre). */}
-    <PropertyLifecyclePanel property={item} agencyId={activeAgencyId} canManage={canDelete} onDeleted={() => navigate('/biens')} />
+    <PropertyLifecyclePanel property={item} agencyId={activeAgencyId} canManage={canManageProperty} onDeleted={() => navigate('/biens')} />
     {editing && <PropertyDialog key={item.id} open={editing} onOpenChange={setEditing} item={item} currency={item.currency}/>}
     {activeImage && <div className="lightbox" role="dialog" aria-modal="true" aria-label="Aperçu de la photo" onClick={()=>setActiveImage(null)}><button type="button" className="icon-button lightbox-close" onClick={()=>setActiveImage(null)} aria-label="Fermer l’aperçu"><X size={18}/></button><img src={activeImage} alt={item.title} onClick={(e)=>e.stopPropagation()}/></div>}
   </>;
@@ -976,8 +985,14 @@ function SettingsPage() {
     setAgencyMessage(changed.length ? `Informations d’agence enregistrées : ${changed.join(', ')}.` : 'Aucune modification à enregistrer.'); } catch (e) { setAgencyMessage(getSupabaseErrorMessage(e, 'enregistrer les informations de l’agence')); } };
   return <><Heading eyebrow="Préférences" title="Paramètres" description="Votre profil personnel et les coordonnées de l’agence active." />
     <div className="settings-stack"><section className="panel settings-panel"><div className="settings-heading"><div className="settings-icon"><UserRound size={17} /></div><div><h2>Mon profil</h2><p>Ces informations concernent uniquement votre compte.</p></div></div><Form {...profileForm}><form className="settings-form" onSubmit={profileForm.handleSubmit(saveProfile)}><div className="settings-readonly"><Mail size={15} /><div><span>Adresse e-mail de connexion</span><strong data-testid="text-profile-email">{user?.email}</strong></div><small>Non modifiable</small></div><div className="form-grid"><FormField control={profileForm.control} name="full_name" render={({ field }) => <FormItem><FormLabel>Nom affiché</FormLabel><FormControl><Input {...field} data-testid="input-profile-name" /></FormControl><FormMessage /></FormItem>} /><FormField control={profileForm.control} name="phone" render={({ field }) => <FormItem><FormLabel>Téléphone</FormLabel><FormControl><Input {...field} data-testid="input-profile-phone" /></FormControl><FormMessage /></FormItem>} /></div><div className="form-actions">{profileMessage && <span className={`form-feedback${profileMessage.includes('Impossible') || profileMessage.includes('refusé') ? ' is-error' : ''}`} role="status" data-testid="status-profile-save">{profileMessage}</span>}<Button type="submit" disabled={updateProfile.isPending} data-testid="button-save-profile">{updateProfile.isPending ? 'Enregistrement…' : 'Enregistrer mon profil'}</Button></div></form></Form></section>
+      {/* BLOC 4 (session 2) : les parametres de l'agence (coordonnees, taux de
+          commission) et le logo sont reserves au proprietaire et a l'administrateur
+          d'agence. Un agent ne les voit PAS — y compris par URL directe : la route
+          /parametres est retiree de sa navigation. Son profil personnel reste
+          modifiable ci-dessus. */}
+      {canManageAgency ? (
+        <>
       <section className="panel settings-panel"><div className="settings-heading"><div className="settings-icon"><Building2 size={17} /></div><div><h2>Informations de l’agence</h2><p>Coordonnées partagées de {activeAgency?.name ?? 'l’agence active'}.</p></div><span className={`permission-badge${canManageAgency ? ' allowed' : ''}`}><KeyRound size={13} /> {canManageAgency ? 'Modification autorisée' : 'Lecture seule'}</span></div>
-        {!canManageAgency && <div className="permission-note"><LockKeyhole size={15} /><span>Seuls les propriétaires et administrateurs peuvent modifier ces champs.</span></div>}
         <Form {...agencyForm}><form className="settings-form" onSubmit={agencyForm.handleSubmit(saveAgency)}><div className="form-grid"><FormField control={agencyForm.control} name="name" render={({ field }) => <FormItem><FormLabel>Nom commercial</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-name" /></FormControl><FormMessage /></FormItem>} /><FormField control={agencyForm.control} name="legal_name" render={({ field }) => <FormItem><FormLabel>Raison sociale</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-legal-name" /></FormControl></FormItem>} /></div><div className="form-grid"><FormField control={agencyForm.control} name="phone" render={({ field }) => <FormItem><FormLabel>Téléphone agence</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-phone" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="email" render={({ field }) => <FormItem><FormLabel>E-mail agence</FormLabel><FormControl><Input type="email" {...field} disabled={!canManageAgency} data-testid="input-agency-email" /></FormControl><FormMessage /></FormItem>} /></div><FormField control={agencyForm.control} name="address" render={({ field }) => <FormItem><FormLabel>Adresse</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-address" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="description" render={({ field }) => <FormItem><FormLabel>Description de l’agence</FormLabel><FormControl><Textarea {...field} disabled={!canManageAgency} placeholder="Présentez votre agence…" data-testid="input-agency-description" /></FormControl><FormMessage /></FormItem>} /><div className="form-grid three-col"><FormField control={agencyForm.control} name="city" render={({ field }) => <FormItem><FormLabel>Ville</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-city" /></FormControl></FormItem>} /><FormField control={agencyForm.control} name="country" render={({ field }) => <FormItem><FormLabel>Pays</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-country" /></FormControl><FormMessage /></FormItem>} /><FormField control={agencyForm.control} name="currency" render={({ field }) => <FormItem><FormLabel>Devise</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-currency" /></FormControl><FormMessage /></FormItem>} /></div><FormField control={agencyForm.control} name="timezone" render={({ field }) => <FormItem><FormLabel>Fuseau horaire</FormLabel><FormControl><Input {...field} disabled={!canManageAgency} data-testid="input-agency-timezone" /></FormControl><FormMessage /></FormItem>} /><div className="form-grid three-col">
         <FormField control={agencyForm.control} name="commission_rate" render={({ field }) => <FormItem><FormLabel>Commission vente (%)</FormLabel><FormControl><Input type="number" min="0" max="100" step="0.5" placeholder="5" {...field} disabled={!canManageAgency} data-testid="input-agency-commission-rate" /></FormControl><FormMessage /></FormItem>} />
         <FormField control={agencyForm.control} name="rental_commission_rate" render={({ field }) => <FormItem><FormLabel>Commission location (%)</FormLabel><FormControl><Input type="number" min="0" max="500" step="5" placeholder="100 = 1 mois de loyer" {...field} disabled={!canManageAgency} data-testid="input-agency-rental-commission-rate" /></FormControl><FormMessage /></FormItem>} />
@@ -991,6 +1006,27 @@ function SettingsPage() {
           logoUrl={activeAgency?.logo_url}
           canManage={canManageAgency}
         />
+        </>
+      ) : (
+        <section className="panel settings-panel" data-testid="panel-agency-settings-locked">
+          <div className="settings-heading">
+            <div className="settings-icon"><LockKeyhole size={17} /></div>
+            <div>
+              <h2>Paramètres de l’agence</h2>
+              <p>Réservés au propriétaire et aux administrateurs de l’agence</p>
+            </div>
+          </div>
+          <div className="permission-note" role="status" data-testid="status-agency-settings-locked">
+            <LockKeyhole size={15} />
+            <span>
+              Les coordonnées de l’agence, les taux de commission et le logo ne sont
+              pas accessibles avec votre rôle. Votre profil personnel reste
+              modifiable ci-dessus. Les règles d’accès définies côté base restent
+              prioritaires.
+            </span>
+          </div>
+        </section>
+      )}
       </div>
   </>;
 }
