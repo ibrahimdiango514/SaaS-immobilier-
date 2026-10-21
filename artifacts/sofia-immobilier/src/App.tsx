@@ -10,6 +10,8 @@ import {
   LockKeyhole, Mail, Phone, MapPin, UserRound, KeyRound, LayoutGrid, List,
   Camera, ImagePlus, Trash2, CalendarDays, BarChart3, UserCog, MessageCircle,
   Bell, CheckCheck, UserPlus, Wallet, Upload, Star, ChevronLeft, ChevronRight,
+  // BLOC 3 (session 2) : cadenas des modules non inclus + etincelle « offre superieure ».
+  Lock, Sparkles,
 } from 'lucide-react';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -51,6 +53,10 @@ import { BackButton } from '@/components/back-button';
 import { trackRoute } from '@/lib/back-navigation';
 // BLOC 2 : ecran d'attente de validation (agence 'pending', dashboard ferme).
 import PendingValidationPage from '@/pages/pending';
+// BLOC 3 (session 2) : source unique d'acces aux modules selon l'offre.
+import {
+  useActiveModuleAccess, moduleForRoute, ModuleLockedScreen, MODULE_LABELS,
+} from '@/lib/module-access';
 import AdminPendingPage from '@/pages/admin/pending';
 import { DailySummaryCard, SmartAlertsCard } from '@/components/smart-alerts';
 // BLOC 4 : tracé précis des modifications des informations de l'agence.
@@ -116,7 +122,7 @@ function AppShell({ children }: { children: ReactNode }) {
   const [signOutError, setSignOutError] = useState('');
   const [notifOpen, setNotifOpen] = useState(false);
   const { user, signOut } = useAuth();
-  const { agencies, activeAgency, activeAgencyId, setActiveAgencyId, activeMembership } = useAgency();
+  const { agencies, activeAgency, activeAgencyId, setActiveAgencyId, activeMembership, canManageAgency } = useAgency();
   const { data: profile } = useCurrentProfile(user?.id);
   const notificationsQ = useNotifications(activeAgencyId);
   const markRead = useMarkNotificationRead(activeAgencyId);
@@ -128,6 +134,8 @@ function AppShell({ children }: { children: ReactNode }) {
   // BLOC 10 (roles) : un agent n'a acces ni a l'Equipe, ni a Mon offre
   // (paiements, offre, consommation). Le filtrage de la navigation seul ne
   // suffit pas : les routes sont aussi gardees (voir RequireManager ci-dessous).
+  // BLOC 3 : l'offre de l'agence decide du menu, des routes, des boutons.
+  const moduleAccess = useActiveModuleAccess();
   const agentHiddenRoutes = ['/equipe', '/mon-offre'];
   const visibleNav = isAgentOnly ? nav.filter((item) => !agentHiddenRoutes.includes(item.href)) : nav;
   // BLOC 9 : journal des routes internes -> le bouton retour ne sort jamais de l'app.
@@ -147,7 +155,28 @@ function AppShell({ children }: { children: ReactNode }) {
     <aside className={`sidebar${menuOpen ? ' is-open' : ''}`} aria-label="Navigation principale">
       <Link href="/dashboard" className="brand-lockup" data-testid="link-brand-home" onClick={() => setMenuOpen(false)}><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link>
       <div className="nav-label">Espace de travail</div>
-      <nav className="nav-list" aria-label="Navigation principale">{visibleNav.map(({ href, label, icon: Icon }) => <Link href={href} key={href} className={`nav-link${path === href ? ' is-active' : ''}`} aria-current={path === href ? 'page' : undefined} data-testid={`link-nav-${href === '/dashboard' ? 'overview' : href.slice(1)}`} onClick={() => setMenuOpen(false)}><Icon size={16} /><span>{label}</span></Link>)}</nav>
+      {/* BLOC 3 : un module non inclus reste VISIBLE mais verrouille (cadenas +
+          aria-disabled). Le clic mene a l'ecran « Passer au Pro », jamais au module. */}
+      <nav className="nav-list" aria-label="Navigation principale">{visibleNav.map(({ href, label, icon: Icon }) => {
+        const moduleKey = moduleForRoute(href);
+        const locked = Boolean(moduleKey) && !moduleAccess.has(moduleKey);
+        return (
+          <Link
+            href={href}
+            key={href}
+            className={`nav-link${path === href ? ' is-active' : ''}${locked ? ' is-locked' : ''}`}
+            aria-current={path === href ? 'page' : undefined}
+            aria-disabled={locked || undefined}
+            title={locked ? `${MODULE_LABELS[moduleKey as string] ?? label} — non inclus dans votre offre` : undefined}
+            data-testid={`link-nav-${href === '/dashboard' ? 'overview' : href.slice(1)}`}
+            onClick={() => setMenuOpen(false)}
+          >
+            <Icon size={16} />
+            <span>{label}</span>
+            {locked && <Lock size={13} data-testid={`lock-nav-${href.slice(1)}`} />}
+          </Link>
+        );
+      })}</nav>
       <div className="sidebar-spacer" />
       <div className="connection-card" data-testid="status-data-access"><div className="connection-heading"><i /> Espace sécurisé</div><p>Vos données sont limitées aux agences auxquelles vous avez accès.</p></div>
       <label className="agency-select-label" htmlFor="agency-switcher">Agence active</label>
@@ -191,9 +220,29 @@ function AppShell({ children }: { children: ReactNode }) {
             determine sur la page parente quand il n'y a pas d'historique interne. */}
         <BackButton space="agency" variant="mobile" testId="button-mobile-back" />
         <div className="mobile-brand"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={26} testId="display-mobile-agency-logo" /><strong>{activeAgency?.name ?? 'sofia immobilier'}</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
-      <main className="content-wrap">{children}</main>
-      {/* BLOC 8 : assistant IA accessible depuis tout l'espace agence. */}
-      <AssistantFab />
+      <main className="content-wrap">
+        {/* BLOC 3 : garde unique pour toutes les routes. Une URL saisie
+            directement ne contourne pas le menu : l'ecran verrouille s'affiche. */}
+        {(() => {
+          const moduleKey = moduleForRoute(path);
+          if (moduleKey && !moduleAccess.has(moduleKey)) {
+            return (
+              <ModuleLockedScreen
+                moduleKey={moduleKey}
+                onUpgrade={canManageAgency ? (
+                  <Link href="/mon-offre" className="primary-action" data-testid="button-locked-upgrade">
+                    <Sparkles size={15} /> Demander une offre supérieure
+                  </Link>
+                ) : undefined}
+              />
+            );
+          }
+          return children;
+        })()}
+      </main>
+      {/* BLOC 8 : assistant IA accessible depuis tout l'espace agence.
+          BLOC 3 : le module `assistant_ia` decide de sa presence. */}
+      {moduleAccess.has('assistant_ia') && <AssistantFab />}
     </div>
     {notice && <div className="notice-toast" role={signOutError ? 'alert' : 'status'} data-testid="status-notifications">{signOutError || 'Action effectuée.'}<button onClick={() => setNotice('')} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
   </div>;
@@ -289,6 +338,10 @@ function Overview() {
   // administrateurs de l'agence. Un agent (ou un role non gestionnaire) ne voit
   // ni le panneau CA, ni ses indicateurs.
   const canSeeRevenue = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
+  // BLOC 3 : les filtres de periode du CA sont un module a part (`ca_filters`),
+  // inclus a partir de l'offre Pro. Le graphique `ca_chart` reste dans Essentiel.
+  const moduleAccess = useActiveModuleAccess();
+  const canFilterCa = moduleAccess.has('ca_filters');
   const summary = useDashboardSummary(activeAgencyId);
   const revenueQ = useRevenueOperations(activeAgencyId);
   const [caPeriod, setCaPeriod] = useState<'month' | 'm6' | 'm12' | 'year'>('m6');
@@ -335,11 +388,22 @@ function Overview() {
     <section className="panel revenue-overview-panel" data-testid="panel-ca-dashboard">
       <div className="panel-head">
         <div><h2><Wallet size={17} /> Chiffre d’affaires</h2><p>Commissions calculées automatiquement à chaque vente ou location · volume des transactions affiché en secondaire</p></div>
-        <div className="revenue-toolbar revenue-period-select" role="group" aria-label="Période du chiffre d’affaires">
+        {canFilterCa ? (
+          <div className="revenue-toolbar revenue-period-select" role="group" aria-label="Période du chiffre d’affaires">
           {([['month', 'Mois courant'], ['m6', '6 mois'], ['m12', '12 mois'], ['year', 'Année']] as const).map(([key, label]) => (
             <button key={key} type="button" className={`button-link period-pill${caPeriod === key ? ' is-active' : ''}`} aria-pressed={caPeriod === key} onClick={() => setCaPeriod(key)} data-testid={`button-ca-periode-${key}`}>{label}</button>
           ))}
-        </div>
+          </div>
+        ) : (
+          <div className="module-inline-locked" data-testid="status-ca-filters-locked">
+            <Lock size={13} />
+            <span>
+              Filtres de période inclus à partir de l’offre <strong>Pro</strong>.
+              Le graphique ci-dessous reste disponible.
+            </span>
+            <Link href="/mon-offre" className="text-action" data-testid="link-ca-filters-upgrade">Voir les offres</Link>
+          </div>
+        )}
       </div>
       <div className="revenue-kpis revenue-kpis-dashboard">
         <article className="kpi-card" data-testid="kpi-ca-mois"><span className="kpi-label">CA du mois</span><strong className="kpi-value">{cash(caMonthStats.ca, 'XOF')}</strong><span className="kpi-foot">Commission · volume {cash(caMonthStats.volume, 'XOF')} · {caMonthStats.count} opération(s)</span></article>

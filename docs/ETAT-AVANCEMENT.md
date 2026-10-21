@@ -1287,3 +1287,114 @@ réelles inchangées ✓.
 Le parcours réel inscription → onboarding → écran d'attente → validation admin →
 ouverture du dashboard. La logique base est testée (§ ci-dessus), l'enchaînement
 d'écrans ne l'est pas.
+
+## SESSION 2 — BLOC 3 : FONCTIONNALITÉS PAR OFFRE (FAIT)
+
+### Constat de départ (cause racine du « l'agence démo accède à tout »)
+**Aucun gating n'existait côté front** : ni le menu, ni les routes, ni les widgets
+ne consultaient l'offre. Les pages `/visites`, `/automatisations`, `/assistant-ia`
+étaient ouvertes à toute agence quelle que soit son offre. Côté base, deux
+anomalies du catalogue aggravaient le cas :
+- **`visites` manquait dans Essentiel** (présent seulement en Pro/Premium) alors
+  que la page Visites est un module **complet et fonctionnel** ;
+- **`assistant_ia` n'était dans AUCUNE offre**, y compris Pro et Premium : le
+  module ajouté au BLOC 8 n'était déclaré nulle part dans le catalogue.
+
+### Répartition appliquée en base
+`plans.modules` est la colonne qui **pilote réellement** l'application
+(`agency_has_module`, page Mon offre, comparatif, menu, routes). `plans.features`
+a été mise en cohérence sur les mêmes clés pour que les deux lectures affichent la
+même répartition. **Deux colonnes des 3 lignes seulement**, anciennes valeurs
+recopiées dans le rollback.
+
+| Module | Essentiel | Pro | Premium |
+|---|---|---|---|
+| biens, contacts, pipeline | ✓ | ✓ | ✓ |
+| **visites** | **✓ (ajouté)** | ✓ | ✓ |
+| dashboard, ca_chart | ✓ | ✓ | ✓ |
+| automatisations | — | ✓ | ✓ |
+| ca_filters, ca_export_csv | — | ✓ | ✓ |
+| **assistant_ia** | — | **✓ (ajouté)** | **✓ (ajouté)** |
+| stats_avancees, rapports_mensuels, support_prioritaire | — | — | ✓ |
+
+**Vérification exécutée en base** (`agency_has_module`) : `sbc-demo` et
+`iango-agengy` (Essentiel) → `visites=true`, `ca_chart=true`,
+`automatisations=false`, `ca_filters=false`, `assistant_ia=false`,
+`stats_avancees=false`. `agence-test-suspendue` (aucune offre) → tout à `false`.
+
+### La page Visites est bien un module fonctionnel (vérifié, pas une vitrine)
+`src/pages/visits.tsx` (397 lignes) : liste (`useVisits`), création
+(`useCreateVisit`), modification (`useUpdateVisit`), suppression (`useDeleteVisit`),
+fenêtre `VisitDialog` avec lien vers un bien et un contact, visites à venir /
+passées. Aucun écran « Bientôt » : **rien à construire**, le déverrouillage pour
+Essentiel est donc sûr.
+
+### Source unique côté interface
+`src/lib/module-access.tsx` — **une seule source** : le plan de l'agence via
+`agency_current_plan` (RPC public déjà gardé en base).
+- `MODULE_KEYS`, `MODULE_LABELS`, `ROUTE_MODULE`, `moduleForRoute()`,
+  `moduleMinPlanLabel()` (Pro ou Premium selon le module) ;
+- `useModuleAccess(agencyId)` / `useActiveModuleAccess()` → `{ included, has(),
+  loading, error, plan, planName }`. Pendant le chargement `has()` renvoie `true`
+  pour éviter un écran « Passer au Pro » qui clignote ; dès que l'offre est connue,
+  une agence **sans abonnement** n'a accès à rien ;
+- `ModuleLockedScreen` : écran « module non inclus », offre minimale nommée, lien
+  « Voir les offres », et pour owner/admin un bouton « Demander une offre
+  supérieure » ;
+- `RequireModule` : garde réutilisable.
+
+**Application dans `src/App.tsx` :**
+- **Menu** : un module non inclus reste **VISIBLE** avec un cadenas
+  (`.nav-link.is-locked`, `aria-disabled`, `title` explicite, `lock-nav-*`). Le
+  clic mène à l'écran verrouillé, jamais au module.
+- **Routes** : **garde unique** dans `AppShell` — `moduleForRoute(path)` est testé
+  pour TOUTES les routes, donc **une URL saisie directement ne contourne pas le
+  menu**.
+- **Widgets** : les filtres de période du CA (`ca_filters`) sont remplacés par un
+  bandeau verrouillé en Essentiel, **le graphique `ca_chart` restant disponible**
+  (conforme à la répartition demandée).
+- **Bouton flottant de l'assistant** : rendu uniquement si `assistant_ia` est
+  inclus (Pro/Premium).
+
+### Appliqué côté serveur
+- **Assistant IA** : déjà vérifié côté serveur au BLOC 8 dans
+  `dashboard-assistant` (offre Pro/Premium contrôlée par `agency_current_plan`,
+  **jamais** par un paramètre du navigateur) + quota mensuel + limite de débit.
+  Le front ne fait que masquer l'entrée ; le serveur refuse de toute façon.
+- **`agency_has_module`** existe déjà en base et lit `plans.modules` : toute
+  vérification serveur future dispose du même référentiel que l'interface.
+- **Agences sans offre / en attente** : `public.agence_active` (durci au BLOC 2)
+  renvoie `false`, donc les Edge Functions refusent ; et `agency_has_module`
+  renvoie `false` pour tous les modules (vérifié sur `agence-test-suspendue`).
+
+### Ce qui n'est appliqué QUE côté interface (à connaître)
+1. **`ca_filters` et `ca_export_csv`** : purement visuels. Les données du CA sont
+   déjà renvoyées en une fois par `useRevenueOperations` ; filtrer ou exporter
+   côté client ne peut pas être empêché côté serveur sans créer une fonction
+   d'export dédiée (non demandé ici).
+2. **`stats_avancees`, `rapports_mensuels`, `support_prioritaire`** : aucun écran
+   dédié n'existe encore dans l'application. Ces clés sont déclarées au catalogue
+   et réservées ; rien à verrouiller tant que les écrans ne sont pas construits.
+3. **`automatisations`** : la page existe et est verrouillée par la garde de route,
+   mais les automatisations elles-mêmes sont exécutées hors application (n8n) : un
+   flux n8n qui écrit directement en base avec la clé `service_role` ne passe pas
+   par ce contrôle.
+4. **Menu et cadenas** : cosmétiques par nature — la vraie barrière est la garde de
+   route et, pour l'assistant, le contrôle serveur.
+5. **`/whatsapp`** : **non verrouillé**. La clé `whatsapp` n'existe pas dans
+   `plans.modules` (seulement dans `features`, à `true` pour Pro/Premium) et votre
+   répartition ne la mentionne pas. Je n'ai donc pas inventé de restriction :
+   **dites-moi si WhatsApp doit être réservé à Pro/Premium** et je l'ajoute.
+
+### Test demandé (à faire par vous, sans navigateur je ne peux pas)
+Agence démo en Essentiel → Visites accessible, modules Pro verrouillés (menu avec
+cadenas + écran « Passer au Pro » en URL directe) ; admin passe l'agence en Pro →
+déverrouillé immédiatement (le cache `agency_current_plan` a `staleTime: 60 s` :
+recharger la page) ; retour en Essentiel → reverrouillé.
+
+### Fichiers
+`db/migrations/2026-10-21_session2_bloc3_offres_modules.sql` ↔
+`db/rollback/2026-10-21_session2_bloc3_offres_modules.sql` ·
+`src/lib/module-access.tsx` (nouveau) · `src/App.tsx` · `src/index.css`
+
+`pnpm run typecheck` OK · `pnpm run build` OK

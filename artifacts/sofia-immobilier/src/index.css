@@ -4081,3 +4081,58 @@ button.row-action.danger-action { color: var(--si-danger); }
   .pending-admin-actions { flex-direction: column; align-items: stretch; }
   .pending-admin-actions button { width: 100%; }
 }
+
+/* =============================================================================
+   SESSION 2 — BLOC 3 : MODULES VERROUILLÉS SELON L'OFFRE
+   Un module non inclus reste VISIBLE (menu, cadenas) mais n'est jamais
+   accessible : l'écran ci-dessous remplace la page, y compris par URL directe.
+   ============================================================================= */
+.nav-link.is-locked { color: var(--si-text-muted); }
+.nav-link.is-locked span { opacity: .82; }
+.nav-link.is-locked svg:last-child { margin-left: auto; flex: none; opacity: .75; }
+.nav-link.is-locked:hover { border-color: var(--si-border-gold); }
+
+.module-locked {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  padding: 26px 22px;
+  border-radius: 18px;
+  border: 1px dashed var(--si-border-gold);
+  background: var(--si-bg-warm);
+}
+.module-locked-icon {
+  display: grid; place-items: center;
+  width: 46px; height: 46px;
+  border-radius: 14px;
+  border: 1px solid var(--si-border-gold);
+  background: var(--si-surface-2);
+  color: var(--si-gold-text, var(--si-text));
+}
+.module-locked h2 { margin: 0; font-size: 17.5px; color: var(--si-text-heading); }
+.module-locked p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--si-text-muted); max-width: 66ch; }
+.module-locked-actions { display: flex; flex-wrap: wrap; gap: 9px; width: 100%; }
+.module-locked-actions .primary-action,
+.module-locked-actions .button-link { min-height: 44px; }
+.module-locked .form-hint { margin: 0; width: 100%; }
+
+.module-inline-locked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  border: 1px dashed var(--si-border-gold);
+  background: var(--si-bg-warm);
+  font-size: 12.2px;
+  color: var(--si-text-muted);
+}
+.module-inline-locked svg { flex: none; }
+.module-inline-locked strong { color: var(--si-text); }
+.module-inline-locked .text-action { margin-left: auto; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .module-locked { padding: 20px 16px; }
+  .module-inline-locked .text-action { margin-left: 0; }
+}
