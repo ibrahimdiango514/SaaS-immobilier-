@@ -8,6 +8,7 @@ import {
   Bell,
   Building2,
   CreditCard,
+  Gauge,
   Home,
   LayoutDashboard,
   LogOut,
@@ -44,6 +45,8 @@ const adminNav: AdminNavItem[] = [
   // BLOC 2 : file de validation des paiements et demandes de changement d'offre.
   { href: '/admin/paiements', label: 'Paiements & offres', icon: Wallet, badge: 'pendingBilling' },
   { href: '/admin/ca', label: 'Chiffre d’affaires', icon: TrendingUp },
+  // BLOC 7 : consommation IA et canal WhatsApp, par agence (lecture seule).
+  { href: '/admin/consommation', label: 'Consommation IA', icon: Gauge },
   { href: '/admin/activite', label: 'Activité & alertes', icon: Activity },
   { href: '/admin/reglages', label: 'Réglages', icon: Settings2 },
 ];

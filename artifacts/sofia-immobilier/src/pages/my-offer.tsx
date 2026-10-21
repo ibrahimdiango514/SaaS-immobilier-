@@ -10,6 +10,10 @@ import {
   ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel,
 } from '@/lib/workspace-ui';
 import { PaymentSection } from '@/components/payment-panel';
+// BLOC 7 : jauge « Utilisation IA ce mois » (lecture seule, quotas de l'offre).
+import { useAgencyAiUsage, compactNumber } from '@/lib/usage-api';
+import { UsageGauge, WhatsAppBadge } from '@/components/usage-gauge';
+import { whatsappStatusLabel } from '@/lib/usage-api';
 import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 
@@ -148,6 +152,8 @@ function Meter({ label, used, limit, icon: Icon }: { label: string; used: number
 export default function MyOfferPage() {
   const { activeAgencyId, canManageAgency } = useAgency();
   const usage = useUsageSnapshot(activeAgencyId);
+  // BLOC 7 : appelé avant tout return anticipé (règle des hooks).
+  const aiUsage = useAgencyAiUsage(activeAgencyId);
   const plans = useAllPlans();
   const requestChange = useRequestPlanChange(activeAgencyId);
   const [notice, setNotice] = useState('');
@@ -236,6 +242,114 @@ export default function MyOfferPage() {
             « photos » = maximum atteint sur un seul bien.
             {seats.invitations_pending > 0 && ` ${seats.invitations_pending} invitation(s) en attente déjà comptée(s).`}
           </p>
+        </section>
+
+        {/* ----------------------------------------------------------------- */}
+        {/* BLOC 7 : consommation IA du mois + état du canal WhatsApp          */}
+        {/* ----------------------------------------------------------------- */}
+        <section className="panel ai-usage-panel" data-testid="panel-ai-usage">
+          <div className="panel-head">
+            <div>
+              <h2>Utilisation IA ce mois</h2>
+              <p>
+                {aiUsage.data?.period_start
+                  ? `Période du ${new Date(aiUsage.data.period_start).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}`
+                  : 'Période en cours'}
+                {' · '}alerte à 80 % puis à 100 % du quota de votre offre.
+              </p>
+            </div>
+            <Sparkles size={18} />
+          </div>
+
+          {aiUsage.isLoading && <p className="form-hint">Chargement des compteurs IA…</p>}
+          {aiUsage.error && (
+            <p className="form-error" role="alert" data-testid="status-ai-usage-error">
+              {getSupabaseErrorMessage(aiUsage.error, 'charger l’utilisation IA')}
+            </p>
+          )}
+
+          {aiUsage.data && (
+            <>
+              <div className="ai-gauges">
+                <UsageGauge
+                  label="Tokens IA"
+                  used={aiUsage.data.usage.ai_tokens_total}
+                  limit={aiUsage.data.plan.monthly_ai_tokens}
+                  ratio={aiUsage.data.ratios.ai_tokens}
+                  alert={aiUsage.data.alerts.ai_tokens}
+                  testId="ai-tokens"
+                />
+                <UsageGauge
+                  label="Messages"
+                  used={aiUsage.data.usage.messages_count}
+                  limit={aiUsage.data.plan.monthly_agent_messages}
+                  ratio={aiUsage.data.ratios.messages}
+                  alert={aiUsage.data.alerts.messages}
+                  testId="ai-messages"
+                />
+                <UsageGauge
+                  label="Conversations"
+                  used={aiUsage.data.usage.conversations_count}
+                  limit={aiUsage.data.plan.monthly_conversations}
+                  ratio={aiUsage.data.ratios.conversations}
+                  alert={aiUsage.data.alerts.conversations}
+                  testId="ai-conversations"
+                />
+              </div>
+
+              <p className="usage-caption" data-testid="text-ai-requests">
+                {aiUsage.data.usage.ai_requests_count} requête(s) IA ce mois ·{' '}
+                {compactNumber(aiUsage.data.usage.ai_tokens_input)} tokens en entrée,{' '}
+                {compactNumber(aiUsage.data.usage.ai_tokens_output)} en sortie.
+              </p>
+
+              {aiUsage.data.alerts.ai_tokens !== 'ok' && aiUsage.data.alerts.ai_tokens !== 'unlimited' && (
+                <div className={`notice-box${aiUsage.data.alerts.ai_tokens === 'reached' ? ' is-danger' : ' is-warning'}`} role="status" data-testid="status-ai-quota-alert">
+                  <AlertTriangle size={15} />
+                  <span>
+                    {aiUsage.data.alerts.ai_tokens === 'reached'
+                      ? `Quota de tokens IA atteint pour ${aiUsage.data.plan.display_name ?? 'votre offre'}. L’assistant IA ne répondra plus jusqu’au mois prochain.`
+                      : `Vous avez consommé ${Math.round(aiUsage.data.ratios.ai_tokens)} % du quota de tokens IA de ${aiUsage.data.plan.display_name ?? 'votre offre'}.`}
+                    {canManageAgency && ' Envisagez une offre supérieure.'}
+                  </span>
+                </div>
+              )}
+
+              {/* Canal WhatsApp de l'agence : fournisseur, numéro, état. */}
+              <div className="ai-whatsapp">
+                <h3>Canal WhatsApp</h3>
+                {aiUsage.data.whatsapp.length ? (
+                  <div className="ai-whatsapp-list">
+                    {aiUsage.data.whatsapp.map((connection) => (
+                      <div key={connection.id} data-testid={`row-my-whatsapp-${connection.id}`}>
+                        <WhatsAppBadge
+                          providerLabel={connection.provider_label}
+                          official={connection.official}
+                          status={whatsappStatusLabel(connection.status)}
+                          phoneNumber={connection.phone_number}
+                          testId={connection.id}
+                        />
+                        <small>
+                          Dernière activité :{' '}
+                          {connection.last_activity_at
+                            ? new Date(connection.last_activity_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })
+                            : 'jamais'}
+                          {aiUsage.data?.plan.max_whatsapp_connections != null && (
+                            <> · {aiUsage.data.whatsapp.length}/{aiUsage.data.plan.max_whatsapp_connections} canal(aux) inclus</>
+                          )}
+                        </small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="usage-caption">
+                    Aucun canal WhatsApp connecté. Votre offre {aiUsage.data.plan.display_name ?? ''} inclut{' '}
+                    {aiUsage.data.plan.max_whatsapp_connections ?? 0} canal(aux).
+                  </p>
+                )}
+              </div>
+            </>
+          )}
         </section>
 
         <section className="panel" data-testid="panel-modules">

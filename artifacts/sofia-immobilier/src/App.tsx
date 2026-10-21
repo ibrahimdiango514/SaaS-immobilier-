@@ -64,6 +64,8 @@ import AdminActivityPage from '@/pages/admin/activity';
 import AdminSubscriptionsPage from '@/pages/admin/subscriptions';
 import AdminBillingPage from '@/pages/admin/billing';
 import AdminSettingsPage from '@/pages/admin/settings';
+// BLOC 7 : consommation IA et canal WhatsApp (espace plateforme).
+import AdminUsagePage from '@/pages/admin/usage';
 import AdminRevenuePage from '@/pages/admin/revenue';
 import WelcomePage from '@/pages/welcome';
 import TeamPage from '@/pages/team';
@@ -1020,6 +1022,7 @@ function RoutedContent() {
         <Route path="/admin/abonnements" component={AdminSubscriptionsPage} />
         <Route path="/admin/paiements" component={AdminBillingPage} />
         <Route path="/admin/reglages" component={AdminSettingsPage} />
+        <Route path="/admin/consommation" component={AdminUsagePage} />
         <Route path="/admin/ca" component={AdminRevenuePage} />
         <Route path="/admin/activite" component={AdminActivityPage} />
         <Route component={NotFound} />

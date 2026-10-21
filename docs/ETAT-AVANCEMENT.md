@@ -332,3 +332,73 @@ Autres écritures en base :
   pour distinguer l'archivage agence (`is_archived`) de la modération plateforme
   (`status='archived'`), dans le tableau et le tiroir de détail.
 - `pnpm run typecheck` OK · `pnpm run build` OK.
+
+## BLOC 7 — CONSOMMATION IA + CANAL WHATSAPP : FAIT, 3 FONCTIONS APPLIQUÉES
+
+**Migration STRICTEMENT ADDITIVE appliquée en base** :
+`db/migrations/2026-10-21_bloc7_usage_ia_whatsapp.sql`
++ rollback `db/rollback/2026-10-21_bloc7_usage_ia_whatsapp_rollback.sql`.
+Aucune table, colonne, politique RLS ni fonction existante modifiée. Réutilise
+`agency_usage`, `usage_events`, `whatsapp_connections` et `plans` — **aucune
+table dupliquée** (`whatsapp_connections` existait déjà, comme annoncé).
+
+### Fonctions créées (droits vérifiés en base)
+| Fonction | Rôle | Droits |
+|---|---|---|
+| `public.record_ai_usage(agency_id, tokens_in, tokens_out, messages, conversations, event_key, user_id, metadata) → jsonb` | incrémente `agency_usage` (mois UTC courant) | **service_role UNIQUEMENT** — vérifié : anon=false, authenticated=false, service_role=true |
+| `public.agency_ai_usage(uuid) → jsonb` | consommation du mois + quotas + ratios + alertes + canaux WhatsApp | authenticated (garde interne `is_agency_member` OU `is_platform_admin`), service_role |
+| `public.platform_agency_usage() → jsonb` | tableau plateforme : 1 ligne/agence + totaux | authenticated (garde interne `is_platform_admin()`) |
+
+`record_ai_usage` applique **le même contrôle `agence_active` que les photos** :
+une agence suspendue lève `agency_suspended` et ne consomme plus.
+
+### Deux pièges techniques découverts et contournés (à retenir)
+1. **`current_user` ne vaut JAMAIS `'service_role'` dans une fonction
+   `SECURITY DEFINER`** (il devient le propriétaire, `postgres` — vérifié en base :
+   `current_user = 'postgres'`). Le contrôle service_role passe donc par
+   **`auth.role()`** (claim `role` du JWT). Conséquence : l'existante
+   `public.record_usage_event` teste `current_user = 'service_role'` → son chemin
+   service_role est **mort** ; elle exige toujours `auth.uid()` + un
+   `p_conversation_id`. À traiter au BLOC 10.
+2. **`usage_events` n'a aucune contrainte unique sur `(agency_id, event_key)`** →
+   un `ON CONFLICT (agency_id, event_key)` lève `42P10`. C'est précisément ce que
+   fait `record_usage_event` (donc elle échoue aussi pour cette raison).
+   `record_ai_usage` déduplique par un `SELECT` préalable et renvoie
+   `"deduplicated": true`. **Ne pas ajouter d'`ON CONFLICT` sur cette table.**
+
+### Front
+- `src/lib/usage-api.ts` : types + `useAgencyAiUsage` + `usePlatformAgencyUsage`,
+  `compactNumber`, `isUnlimitedLimit`, `whatsappStatusLabel`, `ALERT_LABELS`.
+- `src/components/usage-gauge.tsx` : `UsageGauge` (jauge à 3 états : `ok`,
+  `warning` à 80 %, `reached` à 100 %, `unlimited`) et `WhatsAppBadge`
+  (fournisseur + **badge « non officiel » pour Evolution API** + numéro + état +
+  `+N` si plusieurs connexions).
+- **Espace plateforme** : nouvelle page `src/pages/admin/usage.tsx` →
+  `/admin/consommation`, entrée de nav « Consommation IA » (icône `Gauge`).
+  4 KPI (tokens du mois + requêtes, quotas sous tension 80 %/100 %, messages +
+  conversations, agences avec canal WhatsApp), bandeau d'alerte global avec lien
+  vers Abonnements, recherche, filtres (à 80 %, quota atteint, avec WhatsApp),
+  tri (tokens / alerte / nom), tableau **par agence** : tokens IA du mois / quota
+  avec jauge, messages / plafond, conversations, **colonne canal WhatsApp**
+  (fournisseur, numéro, état, badge non officiel), dernière activité. Export CSV.
+  Table responsive (passe en cartes sous 900 px). Encart rappelant que l'écran
+  est en lecture seule.
+- **Espace agence** : panneau « Utilisation IA ce mois » dans `Mon offre`
+  (`pages/my-offer.tsx`) — 3 jauges (tokens, messages, conversations), détail
+  entrées/sorties, alerte à 80 %/100 % avec invitation à passer à l'offre
+  supérieure pour owner/admin, et état du canal WhatsApp de l'agence.
+- `pnpm run typecheck` OK · `pnpm run build` OK.
+
+### Données réelles observées
+« SBC AI Agency Demo » a 1 connexion **Evolution API** (`+22300000000`,
+`disconnected`, dernière activité 2026-08-17) → le badge « non officiel »
+s'affichera. Les 3 agences sont à 0 token ce mois (aucune consommation IA
+enregistrée à ce jour). « Agence Test Suspendue » n'a aucune offre active :
+l'écran affiche « Aucune offre active » et des jauges non plafonnées.
+
+### Guide n8n
+`docs/n8n-record-ai-usage.md` : signature, contrôles, appel HTTP PostgREST
+(`/rest/v1/rpc/record_ai_usage`) avec la clé service_role en Header Auth,
+variante nœud Postgres (avec `set_config('request.jwt.claims', …)` puisque le
+claim de rôle n'existe pas en connexion directe), idempotence par `event_key`,
+format de réponse, exploitation de `quota_exceeded`, et table de dépannage.
