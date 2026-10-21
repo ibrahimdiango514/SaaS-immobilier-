@@ -46,6 +46,9 @@ import { AgencyLogoCard } from '@/components/agency-logo-card';
 import { ArchivedPropertiesPanel, PropertyLifecyclePanel } from '@/components/property-lifecycle';
 // BLOC 8 : assistant IA (bouton flottant), resume du jour et alertes intelligentes.
 import { AssistantFab } from '@/components/assistant-fab';
+// BLOC 9 : bouton retour partage (agence, admin, pages publiques) + suivi de route.
+import { BackButton } from '@/components/back-button';
+import { trackRoute } from '@/lib/back-navigation';
 import { DailySummaryCard, SmartAlertsCard } from '@/components/smart-alerts';
 // BLOC 4 : tracé précis des modifications des informations de l'agence.
 import { diffAgencyFields, traceAgencySettingsChange } from '@/lib/agency-activity';
@@ -120,6 +123,8 @@ function AppShell({ children }: { children: ReactNode }) {
   // LOT A (point 4) : un agent n'a pas acces a la gestion de l'equipe.
   const isAgentOnly = activeMembership?.role === 'agent';
   const visibleNav = isAgentOnly ? nav.filter((item) => item.href !== '/equipe') : nav;
+  // BLOC 9 : journal des routes internes -> le bouton retour ne sort jamais de l'app.
+  useEffect(() => { trackRoute(path); }, [path]);
   const currentLabel = nav.find((item) => item.href === path)?.label ?? (path.startsWith('/biens/') ? 'Fiche bien' : path.startsWith('/contacts/') ? 'Fiche contact' : 'Espace de travail');
   const handleSignOut = async () => {
     setSignOutError('');
@@ -148,7 +153,7 @@ function AppShell({ children }: { children: ReactNode }) {
       <button className="sidebar-signout" onClick={() => void handleSignOut()} data-testid="button-sign-out"><LogOut size={14} /> Se déconnecter</button>
     </aside>
     <div className="main-column">
-      <header className="topbar"><div className="breadcrumb"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={24} testId="display-topbar-agency-logo" /><span>{activeAgency?.name ?? 'Espace agence'}</span><ArrowRight size={12} /><strong>{currentLabel}</strong></div><div className="topbar-tools">{path !== '/dashboard' && <Link href="/dashboard" className="icon-button topbar-back" aria-label="Retour à la vue d’ensemble" title="Retour à la vue d’ensemble" data-testid="button-back-overview"><ChevronLeft size={16} /></Link>}<button type="button" className="icon-button topbar-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" title="Se déconnecter" data-testid="button-topbar-sign-out"><LogOut size={15} /></button><ThemeToggle testId="button-theme-toggle-app" /><Link href="/profil" className="profile-chip" data-testid="display-user-access-status"><div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div><span>{name}</span></Link>
+      <header className="topbar"><div className="breadcrumb"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={24} testId="display-topbar-agency-logo" /><span>{activeAgency?.name ?? 'Espace agence'}</span><ArrowRight size={12} /><strong>{currentLabel}</strong></div><div className="topbar-tools">{path !== '/dashboard' && <BackButton space="agency" variant="desktop" testId="button-back-overview" />}<button type="button" className="icon-button topbar-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" title="Se déconnecter" data-testid="button-topbar-sign-out"><LogOut size={15} /></button><ThemeToggle testId="button-theme-toggle-app" /><Link href="/profil" className="profile-chip" data-testid="display-user-access-status"><div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div><span>{name}</span></Link>
         <div className="notif-wrap">
           <button type="button" className="icon-button notif-button" onClick={() => setNotifOpen((v) => !v)} aria-label="Notifications" title="Notifications" aria-expanded={notifOpen} data-testid="button-notifications">
             <Bell size={15} />
@@ -175,9 +180,9 @@ function AppShell({ children }: { children: ReactNode }) {
         </div>
       </div></header>
       <header className="mobile-header">
-        {/* BLOC 9 : bouton retour visible aussi sur mobile et dans les previews.
-            Repli sur /dashboard quand il n'y a pas d'historique de navigation. */}
-        {path !== '/dashboard' && <button type="button" className="icon-button mobile-back" onClick={() => { if (window.history.length > 1) window.history.back(); else window.location.assign('/dashboard'); }} aria-label="Retour" title="Retour" data-testid="button-mobile-back"><ChevronLeft size={20} /></button>}
+        {/* BLOC 9 : retour visible sur mobile ET dans les previews. Repli
+            determine sur la page parente quand il n'y a pas d'historique interne. */}
+        <BackButton space="agency" variant="mobile" testId="button-mobile-back" />
         <div className="mobile-brand"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={26} testId="display-mobile-agency-logo" /><strong>{activeAgency?.name ?? 'sofia immobilier'}</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">{children}</main>
       {/* BLOC 8 : assistant IA accessible depuis tout l'espace agence. */}
@@ -967,7 +972,8 @@ function Login() {
     const destinationLabel = roleQ.data?.isAdmin ? 'Continuer vers la console d’administration' : 'Continuer vers l’espace agence';
     return <div className="auth-loading"><div className="state-card"><div className="state-icon"><ShieldCheck size={19} /></div><h2>Session déjà ouverte</h2><p>Votre compte est déjà connecté à Sofia Immobilier.</p><Link href={destination} className="text-action" data-testid="link-continue-workspace">{destinationLabel} <ArrowRight size={14} /></Link></div></div>;
   }
-  return <div className="login-page"><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
+  // BLOC 9 : page publique -> retour vers l'accueil, cible 44 px, visible sur mobile.
+  return <div className="login-page"><div className="public-back-row"><BackButton to="/" label="Retour à l’accueil" testId="button-back-login" /></div><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
     <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="vous@agence.ml" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />
     <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type="password" autoComplete="current-password" placeholder="Votre mot de passe" data-testid="input-login-password" /></FormControl></div><FormMessage /></FormItem>} />
     {(blockedNotice) && <p className="form-error login-blocked-notice" role="alert" data-testid="status-account-disabled">Votre compte agence est désactivé. Contactez l’administrateur.</p>}

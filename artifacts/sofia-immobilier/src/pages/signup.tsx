@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
+import { BackButton } from '@/components/back-button';
 import { ArrowRight, CheckCircle2, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -83,6 +84,8 @@ export default function SignupPage() {
 
   return (
     <div className="login-page">
+      {/* BLOC 9 : retour visible aussi sur mobile (l'aside peut etre masque). */}
+      <div className="public-back-row"><BackButton to="/login" label="Retour à la connexion" testId="button-back-signup" /></div>
       <div className="login-aside">
         <Link href="/login" className="brand-lockup" data-testid="link-signup-brand">
           <BrandMark />

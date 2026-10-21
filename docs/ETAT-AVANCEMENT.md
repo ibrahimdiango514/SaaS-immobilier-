@@ -498,3 +498,83 @@ serveur ». Tout le reste de l'application fonctionne normalement.
 ### Non testable depuis le sandbox
 Le sandbox ne joint pas `*.supabase.co` : la fonction déployée ne peut être
 exercée que depuis un navigateur. Voir la liste de tests manuels en fin de document.
+
+## BLOC 9 — NAVIGATION MOBILE (BOUTON RETOUR) : FAIT
+
+### Cause racine du bug (trouvée, pas contournée)
+`.topbar { display: none }` est déclaré dans `@media (max-width: 760px)`. Or
+**l'espace admin n'avait aucun en-tête mobile** : son unique en-tête est
+`<header className="topbar admin-topbar">`. Sous 760 px (téléphone, et toute
+preview intégrée étroite), l'administration perdait donc **d'un coup** la flèche
+de retour, le bouton de menu, le thème et la déconnexion. La règle
+`.admin-menu-button { display: grid }` (≤ 900 px) était morte puisque son parent
+était masqué à ≤ 760 px.
+
+Côté agence, la flèche existait dans `.mobile-header` mais :
+- elle appelait `window.history.back()` dès que `history.length > 1`, ce qui peut
+  **faire quitter l'application** (ouverture directe d'un lien, rafraîchissement,
+  iframe de preview où l'historique appartient à la page parente) ;
+- le repli codait `/dashboard` en dur, y compris depuis `/biens/:id` (qui doit
+  remonter à `/biens`) ou depuis l'espace admin ;
+- la déconnexion mobile n'apparaissait que sous 720 px, pas entre 721 et 760 px.
+
+### Correctifs
+**Nouveaux fichiers**
+- `src/lib/back-navigation.ts` : carte **route → page parente** pour les trois
+  espaces, journal des routes internes (`trackRoute`, 30 dernières),
+  `previousInternalRoute`, `canUseNativeBack`, `parentRouteFor`, `backLabelFor`.
+  Règles : `/biens/:id → /biens`, `/contacts/:id → /contacts`, toute page agence
+  `→ /dashboard`, `/admin/* → /admin`, **`/admin → /dashboard`** (retour à
+  l'espace agence), `/profil → /admin` ou `/dashboard` selon l'espace,
+  `/inscription|/rejoindre → /login`, `/login → /`, `/onboarding → /dashboard`.
+- `src/components/back-button.tsx` : `<BackButton space path to label variant
+  className testId icon />`. `history.back()` **uniquement** si la page
+  précédente est interne à l'application, sinon navigation déterministe vers le
+  parent. Se masque tout seul sur la racine d'un espace (rien à remonter).
+  Cible **44 × 44 px minimum**, `aria-label` et `title` explicites.
+
+**Espace agence** (`src/App.tsx`)
+- `.mobile-header` : bouton remplacé par `<BackButton variant="mobile">`, rendu
+  **sans condition de route** (le composant décide).
+- `.topbar` (desktop) : l'ancien `<Link href="/dashboard">` devient le même
+  `<BackButton variant="desktop">` → depuis `/biens/:id` on remonte à `/biens`.
+- `useEffect(() => trackRoute(path), [path])` pour alimenter le journal.
+
+**Espace admin** (`src/pages/admin/admin-shell.tsx`)
+- **Nouvel en-tête mobile** `.mobile-header.admin-mobile-header` : flèche de
+  retour, titre de la section courante, déconnexion (44 px), bouton de menu.
+  `position: sticky`, `safe-area-inset-top/left/right` respectés.
+- Barre supérieure : `<BackButton space="admin" variant="desktop">` — sur une
+  sous-page il remonte à `/admin`, **sur `/admin` il renvoie à l'espace agence**
+  (la flèche « entre espaces » demandée).
+- Même `trackRoute` que l'espace agence.
+
+**Pages publiques** — retour ajouté et toujours atteignable :
+- `/login` (`App.tsx`), `/inscription` (`pages/signup.tsx`), `/rejoindre`
+  (`pages/rejoindre.tsx`), changement de mot de passe imposé
+  (`pages/force-password.tsx`), `/onboarding` (`pages/onboarding.tsx`).
+- Positionné en `.public-back-row` **`position: fixed`** : `.login-page` est une
+  grille 2 colonnes, un enfant supplémentaire aurait cassé la mise en page.
+
+**CSS** (`src/index.css`, section « BLOC 9 »)
+- `.back-button` : 44 × 44 px minimum, `:focus-visible` avec halo, jetons `--si-*`
+  uniquement → lisible en clair comme en sombre.
+- `.mobile-back` et `.topbar-back` alignés sur la même cible tactile.
+- `.admin-mobile-header` masquée par défaut, `display: flex` à ≤ 760 px.
+- `.mobile-header .icon-button { min-width/min-height: 44px }` et
+  `.mobile-header .mobile-signout { display: inline-grid }` → la déconnexion
+  mobile n'a plus de trou entre 721 et 760 px.
+- Safe-area : `env(safe-area-inset-top/left/right/bottom)` sur les deux en-têtes
+  mobiles et sur `.public-back-row`.
+
+**Déconnexion accessible partout** (vérifié par `data-testid`) : espace agence
+`button-sign-out` (barre latérale) + `button-topbar-sign-out` (desktop) +
+`button-mobile-sign-out` (mobile) ; espace admin `button-admin-sign-out` +
+`button-admin-topbar-sign-out` + **`button-admin-mobile-sign-out`** (nouveau).
+
+`pnpm run typecheck` OK · `pnpm run build` OK.
+
+### Non vérifiable sans navigateur
+Le rendu réel sous 760 px, le comportement du geste « retour » du navigateur, et
+le rendu dans une iframe de preview ne peuvent pas être testés depuis le sandbox.
+Tests manuels listés en fin de document.

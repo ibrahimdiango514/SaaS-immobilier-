@@ -3781,3 +3781,105 @@ button.row-action.danger-action { color: var(--si-danger); }
   .smart-alert { grid-template-columns: auto 1fr; }
   .smart-alert .text-action { grid-column: 2; justify-self: start; min-height: 32px; }
 }
+
+/* =============================================================================
+   BLOC 9 — NAVIGATION MOBILE : RETOUR PARTOUT, CIBLES 44 PX, SAFE-AREA
+   Cause racine du bug : `.topbar { display: none }` sous 760 px, et l'espace
+   admin n'avait AUCUN en-tête mobile. Sur téléphone et dans les previews, il
+   n'y avait donc ni flèche de retour, ni menu, ni déconnexion côté admin.
+   ============================================================================= */
+
+/* Cible tactile unique pour les deux variantes : jamais sous 44 x 44 px. */
+.back-button {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid var(--si-border);
+  background: var(--si-panel);
+  color: var(--si-text);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.back-button:hover { border-color: var(--si-border-strong); background: var(--si-surface-3); }
+.back-button:active { background: var(--si-bg); }
+.back-button:focus-visible { outline: 2px solid var(--si-border-gold); outline-offset: 2px; }
+
+/* Les deux variantes héritent du même gabarit (l'ancien `.mobile-back` et le
+   `.topbar-back` desktop doivent rester visuellement cohérents). */
+.mobile-back, .topbar-back {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* --- Espace admin : en-tête mobile dédié --------------------------------- */
+.admin-mobile-header {
+  display: none;
+  height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  border-bottom: 1px solid var(--si-border);
+  background: color-mix(in srgb, var(--si-surface) 92%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+.admin-mobile-header .mobile-brand { min-width: 0; overflow: hidden; }
+.admin-mobile-header .mobile-brand strong {
+  font-family: var(--app-font-serif);
+  font-size: 14px;
+  letter-spacing: -.04em;
+  color: var(--si-text-heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-mobile-header .mobile-signout,
+.admin-mobile-header .mobile-menu-button { display: grid; place-items: center; }
+
+/* --- En-tête mobile de l'espace agence : safe-area + cible 44 px ---------- */
+.mobile-header {
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
+  padding-top: max(8px, env(safe-area-inset-top));
+  gap: 8px;
+}
+.mobile-header .icon-button { min-width: 44px; min-height: 44px; }
+/* La déconnexion mobile était masquée entre 721 et 760 px : toujours visible. */
+.mobile-header .mobile-signout { display: inline-grid; place-items: center; }
+
+/* --- Pages publiques : retour flottant, ne perturbe pas la grille 2 colonnes */
+.public-back-row {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  z-index: 50;
+}
+.public-back-row .back-button {
+  background: color-mix(in srgb, var(--si-surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--si-shadow-soft);
+}
+
+/* --- Onboarding : le retour s'insère dans l'en-tête existant ------------- */
+.onboarding-header { gap: 10px; }
+.onboarding-header > .back-button { order: -1; }
+.onboarding-header .brand-lockup { min-width: 0; }
+
+@media (max-width: 760px) {
+  .admin-mobile-header { display: flex; }
+  /* La barre supérieure admin est masquée : son bouton retour desktop aussi. */
+  .admin-topbar .topbar-back { display: none; }
+}
+@media (max-width: 640px) {
+  .onboarding-header { padding: 12px clamp(12px, 4vw, 20px); }
+  .onboarding-header .brand-caption { display: none; }
+}

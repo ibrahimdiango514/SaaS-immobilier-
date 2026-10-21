@@ -4,6 +4,7 @@
 // cette page ne demande donc jamais d'identifier une agence.
 import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
+import { BackButton } from '@/components/back-button';
 import { ArrowRight, CheckCircle2, LockKeyhole, Mail, ShieldCheck, UserRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -47,6 +48,7 @@ export default function JoinAgencyPage() {
 
   return (
     <div className="login-page">
+      <div className="public-back-row"><BackButton to="/login" label="Retour à la connexion" testId="button-back-join" /></div>
       <div className="login-aside">
         <Link href="/login" className="brand-lockup" data-testid="link-join-brand">
           <BrandMark />

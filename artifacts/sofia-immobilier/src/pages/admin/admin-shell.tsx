@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
   Activity,
@@ -25,6 +25,9 @@ import { useAuth } from '@/lib/auth-context';
 import { usePlatformRole, useAllAgencies, useAllProperties, useAllContacts } from '@/lib/data-hooks';
 import { useSubscriptionRevenue } from '@/lib/admin-billing-api';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
+// BLOC 9 : en-tête mobile admin + retour déterministe entre espaces.
+import { BackButton } from '@/components/back-button';
+import { trackRoute } from '@/lib/back-navigation';
 import { BrandMark } from '@/lib/workspace-ui';
 import { ThemeToggle } from '@/lib/theme';
 
@@ -133,6 +136,8 @@ export default function AdminShell({ children }: { children: ReactNode }) {
     Number(queuesQ.data?.totals?.pending_declarations ?? 0) +
     Number(queuesQ.data?.totals?.pending_plan_changes ?? 0);
   const badges: Record<string, number> = { pendingBilling };
+  // BLOC 9 : journal des routes internes.
+  useEffect(() => { trackRoute(path); }, [path]);
 
   const handleSignOut = async () => {
     try {
@@ -196,11 +201,9 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           <button type="button" className="icon-button admin-menu-button" onClick={() => setMenuOpen((v) => !v)} aria-label="Menu">
             {menuOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
-          {path !== '/admin' && (
-            <Link href="/admin" className="icon-button topbar-back" aria-label="Retour à la vue d’ensemble" title="Retour à la vue d’ensemble" data-testid="button-admin-back">
-              <ArrowLeft size={16} />
-            </Link>
-          )}
+          {/* BLOC 9 : sur une sous-page -> vue d'ensemble admin ; sur /admin
+              -> retour à l'espace agence. Repli déterministe, cible 44 px. */}
+          <BackButton space="admin" variant="desktop" icon={ArrowLeft} testId="button-admin-back" />
           <div className="breadcrumb">
             <Link href="/admin" className="breadcrumb-home"><ShieldCheck size={12} /> Administration</Link>
             <ArrowRight size={12} />
@@ -220,6 +223,35 @@ export default function AdminShell({ children }: { children: ReactNode }) {
               <span>{name}</span>
             </Link>
           </div>
+        </header>
+        {/* BLOC 9 : l'espace admin n'avait AUCUN en-tête sous 760 px (sa barre
+            supérieure est masquée) : plus de flèche de retour, plus de menu, plus
+            de déconnexion sur téléphone et dans les previews. */}
+        <header className="mobile-header admin-mobile-header">
+          <BackButton space="admin" variant="mobile" testId="button-admin-mobile-back" />
+          <div className="mobile-brand">
+            <strong>{adminNav.find((item) => (item.exact ? path === item.href : path.startsWith(item.href)))?.label ?? 'Administration'}</strong>
+          </div>
+          <button
+            type="button"
+            className="icon-button mobile-signout"
+            onClick={() => void handleSignOut()}
+            aria-label="Se déconnecter"
+            title="Se déconnecter"
+            data-testid="button-admin-mobile-sign-out"
+          >
+            <LogOut size={17} />
+          </button>
+          <button
+            type="button"
+            className="icon-button mobile-menu-button"
+            aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+            data-testid="button-admin-mobile-menu"
+          >
+            {menuOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
         </header>
         <main className="content-wrap admin-content">{children}</main>
       </div>

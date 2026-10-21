@@ -3,6 +3,7 @@
 // drapeau user_profiles.must_change_password = true. Tant qu'il n'est pas
 // changé, aucune page de l'espace de travail n'est accessible.
 import { useState } from 'react';
+import { BackButton } from '@/components/back-button';
 import { useMutation } from '@tanstack/react-query';
 import { CheckCircle2, KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -51,6 +52,7 @@ export default function ForcePasswordPage({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="login-page">
+      <div className="public-back-row"><BackButton to="/login" label="Revenir à la connexion" testId="button-back-force-password" /></div>
       <div className="login-aside">
         <div className="brand-lockup">
           <BrandMark />

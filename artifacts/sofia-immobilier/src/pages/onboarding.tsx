@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { ArrowLeft, ArrowRight, Building2, CheckCircle2, ImagePlus, MapPin, Phone, ShieldCheck, X } from 'lucide-react';
+import { BackButton } from '@/components/back-button';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -124,6 +125,8 @@ export default function OnboardingPage() {
   return (
     <div className="onboarding-page">
       <header className="onboarding-header">
+        {/* BLOC 9 : retour explicite, cible 44 px, visible sur mobile. */}
+        <BackButton to="/dashboard" label="Revenir à mon espace" testId="button-back-onboarding" />
         <div className="brand-lockup"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">Création de votre agence</div></div></div>
         <button type="button" className="text-action" onClick={() => navigate('/dashboard')} data-testid="button-skip-onboarding">Plus tard</button>
       </header>
