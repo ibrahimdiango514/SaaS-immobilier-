@@ -1383,10 +1383,14 @@ export function useAllAgencies() {
         db()
           .from('agency_subscriptions')
           .select('id, agency_id, plan_id, status, starts_at, ends_at, trial_ends_at, created_at, updated_at'),
+        // BLOC 2 : display_name / sort_order / setup_fee / modules ajoutés à la
+        // projection — la console admin affiche « Essentiel / Pro / Premium »
+        // au lieu des slugs techniques, et le changement d'offre en un clic a
+        // besoin du prix affiché.
         db()
           .from('plans')
-          .select('id, name, description, price_monthly, currency, max_members, max_properties, max_whatsapp_connections, monthly_ai_tokens, monthly_conversations, features, created_at, updated_at')
-          .order('price_monthly', { ascending: true }),
+          .select('id, name, display_name, description, price_monthly, setup_fee, currency, max_members, max_properties, max_photos_per_property, max_whatsapp_connections, monthly_ai_tokens, monthly_conversations, monthly_agent_messages, modules, sort_order, features, created_at, updated_at')
+          .order('sort_order', { ascending: true }),
         db()
           .from('agency_members')
           .select('id, agency_id, user_id, role, status, created_at, updated_at'),

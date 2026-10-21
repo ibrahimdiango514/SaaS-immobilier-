@@ -169,3 +169,30 @@ Autres écritures en base :
   héritée, donc contraste imprévisible en clair comme en sombre.
 - `pnpm run typecheck` OK · `pnpm run build` OK.
 - Non testé sans navigateur : l'envoi réel de la capture et l'appel RPC.
+
+## BLOC 2 — ADMIN (offres et paiements) : FAIT
+
+- **Réglages** `src/pages/admin/settings.tsx` → route `/admin/reglages` :
+  numéros Orange Money / Wave + titulaires, nom du bénéficiaire, consigne affichée,
+  délai de grâce. Écriture via `public.admin_update_platform_setting`
+  (garde `is_platform_owner`) ; un admin non propriétaire voit l'écran en lecture seule.
+- **File « Paiements à valider » + demandes de changement d'offre**
+  `src/pages/admin/billing.tsx` → route `/admin/paiements`, deux onglets avec compteurs.
+  - Validation / rejet avec motif **obligatoire au rejet** via `review_payment_declaration`
+    (prolonge l'abonnement d'1 mois, crée le paiement, réactive l'agence suspendue).
+  - Approbation / refus des demandes via `admin_handle_plan_change`.
+  - Capture lisible en URL signée 15 min (`payment_proofs_select` = is_platform_admin).
+- **Changement d'offre en un clic** dans `/admin/abonnements` : sélecteur d'offre +
+  « Appliquer » → `admin_change_agency_plan`, avec confirmation.
+- **Graphique des abonnements** de la vue d'ensemble admin **rebranché** sur
+  `public.platform_subscription_revenue` : revenus par mois et agences payantes calculés
+  **en base** sur `subscription_payments` (= paiements validés), KPI agences payantes /
+  en essai / suspendues / variation, répartition par offre réelle (display_name) et
+  revenus cumulés par offre, bandeau des files d'attente en attente.
+- `src/lib/admin-billing-api.ts` : hooks admin (déclarations, demandes, réglages, revenus,
+  URL de capture, review, handle, change plan, update setting).
+- Pastille de compteur sur l'entrée de menu admin « Paiements & offres ».
+- `useAllAgencies` projette désormais `display_name`, `sort_order`, `setup_fee`,
+  `max_photos_per_property`, `monthly_agent_messages`, `modules` ; `PlanRow` complété.
+  Les écrans admin affichent « Essentiel / Pro / Premium » au lieu de `starter/pro/enterprise`.
+- `pnpm run typecheck` OK · `pnpm run build` OK.

@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
-import { CheckCircle2, Download, Search, XCircle } from 'lucide-react';
+import { CheckCircle2, Download, Search, Sparkles, XCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useAllAgencies, useAdminUpdateSubscription, useAdminUpdateAgency } from '@/lib/data-hooks';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
 import { LoadingRows, cash, dateLabel, downloadCsv } from '@/lib/workspace-ui';
+// BLOC 2 (4) : changement d'offre en un clic. La garde is_platform_admin() est
+// portée par la fonction SQL, pas par cet écran.
+import { useAdminChangeAgencyPlan } from '@/lib/admin-billing-api';
 
 const subscriptionStatus: Record<string, string> = {
   active: 'Actif',
@@ -19,7 +22,9 @@ export default function AdminSubscriptionsPage() {
   const agenciesQ = useAllAgencies();
   const updateSubscription = useAdminUpdateSubscription();
   const updateAgency = useAdminUpdateAgency();
+  const changePlan = useAdminChangeAgencyPlan();
   const [search, setSearch] = useState('');
+  const [planDraft, setPlanDraft] = useState<Record<string, string>>({});
   const [statusFilter, setStatusFilter] = useState('all');
   const [pageError, setPageError] = useState('');
   const [pageSuccess, setPageSuccess] = useState('');
@@ -57,6 +62,28 @@ export default function AdminSubscriptionsPage() {
       {
         onSuccess: () => setPageSuccess('Abonnement réactivé pour 30 jours.'),
         onError: (error) => setPageError(getSupabaseErrorMessage(error, 'renouveler l’abonnement')),
+      },
+    );
+  };
+
+  // BLOC 2 (4) : applique immédiatement l'offre choisie à l'agence.
+  // admin_change_agency_plan met à jour l'abonnement existant (ou le crée)
+  // et le passe en statut actif.
+  const applyPlanChange = (agencyId: string, agencyName: string, planId: string) => {
+    const plan = plans.find((row) => row.id === planId);
+    if (!plan) return;
+    const label = plan.display_name ?? plan.name;
+    if (!window.confirm(`Passer l'agence « ${agencyName} » à l'offre ${label} ?`)) return;
+    setPageError('');
+    setPageSuccess('');
+    changePlan.mutate(
+      { agencyId, planId },
+      {
+        onSuccess: () => {
+          setPlanDraft((prev) => ({ ...prev, [agencyId]: '' }));
+          setPageSuccess(`Offre ${label} appliquée à ${agencyName}.`);
+        },
+        onError: (error) => setPageError(getSupabaseErrorMessage(error, 'changer l\u2019offre')),
       },
     );
   };
@@ -122,7 +149,7 @@ export default function AdminSubscriptionsPage() {
         {plans.map((plan) => (
           <article className="panel plan-card" key={plan.id} data-testid={`plan-${plan.name}`}>
             <span className="form-kicker">Formule</span>
-            <h2>{plan.name}</h2>
+            <h2>{plan.display_name ?? plan.name}</h2>
             <strong className="plan-price">{cash(Number(plan.price_monthly), plan.currency)}<small>/mois</small></strong>
             <ul>
               <li>{plan.max_members} membre(s) max.</li>
@@ -154,7 +181,7 @@ export default function AdminSubscriptionsPage() {
           <div className="table-wrap">
             <table className="data-table full-table">
               <thead>
-                <tr><th>Agence</th><th>Formule</th><th>Statut</th><th>Début</th><th>Fin</th><th><span className="sr-only">Actions</span></th></tr>
+                <tr><th>Agence</th><th>Formule</th><th>Statut</th><th>Début</th><th>Fin</th><th>Offre</th><th><span className="sr-only">Actions</span></th></tr>
               </thead>
               <tbody>
                 {rows.map((subscription) => {
@@ -163,7 +190,7 @@ export default function AdminSubscriptionsPage() {
                   return (
                     <tr key={subscription.id} data-testid={`row-subscription-${subscription.id}`}>
                       <td><strong>{agency?.name ?? 'Agence inconnue'}</strong><small>{agency?.city ?? ''}</small></td>
-                      <td>{plan?.name ?? '—'}<small>{plan ? `${cash(Number(plan.price_monthly), plan.currency)}/mois` : ''}</small></td>
+                      <td>{plan?.display_name ?? plan?.name ?? '—'}<small>{plan ? `${cash(Number(plan.price_monthly), plan.currency)}/mois` : ''}</small></td>
                       <td>
                         <span className={`status-pill status-${subscription.status === 'active' ? 'available' : subscription.status === 'trial' ? 'reserved' : 'unavailable'}`}>
                           {subscriptionStatus[subscription.status] ?? subscription.status}
@@ -171,6 +198,42 @@ export default function AdminSubscriptionsPage() {
                       </td>
                       <td>{dateLabel(subscription.starts_at)}</td>
                       <td>{subscription.ends_at ? dateLabel(subscription.ends_at) : subscription.trial_ends_at ? `Essai : ${dateLabel(subscription.trial_ends_at)}` : '—'}</td>
+                      <td>
+                        {/* BLOC 2 (4) : changement d'offre en un clic. */}
+                        <div className="plan-switch">
+                          <select
+                            className="form-select compact-select"
+                            value={planDraft[subscription.agency_id] ?? ''}
+                            onChange={(e) => setPlanDraft((prev) => ({ ...prev, [subscription.agency_id]: e.target.value }))}
+                            aria-label={`Nouvelle offre pour ${agency?.name ?? 'cette agence'}`}
+                            data-testid={`select-plan-${subscription.id}`}
+                          >
+                            <option value="">Changer d\u2019offre…</option>
+                            {plans
+                              .filter((row) => row.id !== subscription.plan_id)
+                              .map((row) => (
+                                <option key={row.id} value={row.id}>
+                                  {row.display_name ?? row.name} · {cash(Number(row.price_monthly), row.currency)}/mois
+                                </option>
+                              ))}
+                          </select>
+                          <button
+                            className="row-action"
+                            disabled={
+                              changePlan.isPending ||
+                              !planDraft[subscription.agency_id]
+                            }
+                            onClick={() => applyPlanChange(
+                              subscription.agency_id,
+                              agency?.name ?? 'cette agence',
+                              planDraft[subscription.agency_id],
+                            )}
+                            data-testid={`button-change-plan-${subscription.id}`}
+                          >
+                            <Sparkles size={14} /> <span>Appliquer</span>
+                          </button>
+                        </div>
+                      </td>
                       <td className="row-actions-cell">
                         <button className="row-action" disabled={updateSubscription.isPending} onClick={() => changeSubscription(subscription.id, 'active')} data-testid={`button-activate-subscription-${subscription.id}`}>
                           <CheckCircle2 size={14} /> <span>Activer</span>

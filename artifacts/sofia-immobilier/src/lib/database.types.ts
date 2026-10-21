@@ -260,6 +260,14 @@ export interface PlanRow {
   features: Json;
   created_at: string;
   updated_at: string;
+  /** LOT A : libellé commercial (« Essentiel », « Pro », « Premium »). */
+  display_name: string | null;
+  setup_fee: number | null;
+  max_photos_per_property: number | null;
+  monthly_agent_messages: number | null;
+  monthly_follow_ups?: number | null;
+  modules: string[] | null;
+  sort_order: number | null;
 }
 
 export interface AgencySubscriptionRow {

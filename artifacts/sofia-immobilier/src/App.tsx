@@ -53,6 +53,8 @@ import AdminAgenciesPage from '@/pages/admin/agencies';
 import AdminPropertiesPage from '@/pages/admin/properties';
 import AdminActivityPage from '@/pages/admin/activity';
 import AdminSubscriptionsPage from '@/pages/admin/subscriptions';
+import AdminBillingPage from '@/pages/admin/billing';
+import AdminSettingsPage from '@/pages/admin/settings';
 import AdminRevenuePage from '@/pages/admin/revenue';
 import WelcomePage from '@/pages/welcome';
 import TeamPage from '@/pages/team';
@@ -928,6 +930,8 @@ function RoutedContent() {
         <Route path="/admin/agences" component={AdminAgenciesPage} />
         <Route path="/admin/biens" component={AdminPropertiesPage} />
         <Route path="/admin/abonnements" component={AdminSubscriptionsPage} />
+        <Route path="/admin/paiements" component={AdminBillingPage} />
+        <Route path="/admin/reglages" component={AdminSettingsPage} />
         <Route path="/admin/ca" component={AdminRevenuePage} />
         <Route path="/admin/activite" component={AdminActivityPage} />
         <Route component={NotFound} />

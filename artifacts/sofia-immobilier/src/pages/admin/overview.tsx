@@ -38,9 +38,10 @@ import {
   useAllContacts,
   useAllMediaRefs,
   useActivityLog,
-  useAllSubscriptionPayments,
   useRecordSubscriptionPayment,
 } from '@/lib/data-hooks';
+import { useSubscriptionRevenue } from '@/lib/admin-billing-api';
+import { Button } from '@/components/ui/button';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
 import { LoadingRows, cash, dateLabel, dateTimeLabel, downloadCsv } from '@/lib/workspace-ui';
@@ -463,7 +464,7 @@ export default function AdminOverviewPage() {
                 const count = (agenciesQ.data?.subscriptions ?? []).filter((s) => s.plan_id === plan.id).length;
                 return (
                   <div className="plan-row" key={plan.id}>
-                    <span><strong>{plan.name}</strong><small>{count} agence(s)</small></span>
+                    <span><strong>{plan.display_name ?? plan.name}</strong><small>{count} agence(s)</small></span>
                     <span className="plan-price">{cash(Number(plan.price_monthly), plan.currency)}/mois</span>
                   </div>
                 );
@@ -491,61 +492,58 @@ const subscriptionStatusLabel: SubscriptionStatusLabel = {
 };
 
 function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typeof useAllAgencies> }) {
-  const paymentsQ = useAllSubscriptionPayments();
-  const recordPayment = useRecordSubscriptionPayment();
+  // BLOC 2 (5) : le graphique est branché sur public.platform_subscription_revenue,
+  // c'est-à-dire sur les VRAIS plans (plans.display_name, sort_order) et sur les
+  // paiements VALIDÉS (subscription_payments n'est alimenté que par
+  // review_payment_declaration ou par l'enregistrement admin). Plus aucun
+  // recalcul côté navigateur.
   const [months, setMonths] = useState<6 | 12>(12);
+  const revenueQ = useSubscriptionRevenue(months);
+  const recordPayment = useRecordSubscriptionPayment();
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
 
   const data = agenciesQ.data;
-  const payments = paymentsQ.data ?? [];
   const subscriptions = data?.subscriptions ?? [];
   const plans = data?.plans ?? [];
   const agencies = data?.agencies ?? [];
   const subByAgency = new Map(subscriptions.map((sub) => [sub.agency_id, sub]));
   const planById = new Map(plans.map((plan) => [plan.id, plan]));
-  const compact = (value: number) => new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  const compact = (value: number) =>
+    new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 
-  const now = new Date();
-  const payingAgencies = agencies.filter((agency) => {
-    const sub = subByAgency.get(agency.id);
-    return Boolean(sub) && sub?.status === 'active' && agency.status !== 'suspended';
-  });
-  const trialAgencies = agencies.filter((agency) => subByAgency.get(agency.id)?.status === 'trial');
-  const unpaidAgencies = agencies.filter((agency) => {
-    const subStatus = subByAgency.get(agency.id)?.status;
-    return agency.status === 'suspended' || (subStatus !== undefined && ['past_due', 'expired', 'cancelled'].includes(subStatus));
-  });
+  const revenue = revenueQ.data;
+  const totals = revenue?.totals;
 
-  const thisMonthKey = monthKey(now);
-  const prevMonthKey = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 15));
-  const sumFor = (key: string) => payments.filter((payment) => monthKey(new Date(`${payment.paid_at}T12:00:00`)) === key).reduce((total, payment) => total + Number(payment.amount || 0), 0);
-  const revenueMonth = sumFor(thisMonthKey);
-  const revenuePrev = sumFor(prevMonthKey);
+  const series = useMemo(
+    () =>
+      (revenue?.months ?? []).map((month) => ({
+        key: month.month_start,
+        label: new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(new Date(`${month.month_start}T12:00:00`)).replace('.', ''),
+        revenus: Number(month.revenue ?? 0),
+        payantes: Number(month.paying_agencies ?? 0),
+      })),
+    [revenue?.months],
+  );
+
+  const revenueMonth = series.length ? series[series.length - 1].revenus : 0;
+  const revenuePrev = series.length > 1 ? series[series.length - 2].revenus : 0;
   const revenueVariation = revenuePrev > 0 ? ((revenueMonth - revenuePrev) / revenuePrev) * 100 : null;
 
-  const series = useMemo(() => {
-    const out: Array<{ key: string; label: string; revenus: number; payantes: number }> = [];
-    const base = new Date();
-    for (let offset = months - 1; offset >= 0; offset -= 1) {
-      const date = new Date(base.getFullYear(), base.getMonth() - offset, 15);
-      const key = monthKey(date);
-      const monthPayments = payments.filter((payment) => monthKey(new Date(`${payment.paid_at}T12:00:00`)) === key);
-      out.push({
-        key,
-        label: new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(date).replace('.', ''),
-        revenus: monthPayments.reduce((total, payment) => total + Number(payment.amount || 0), 0),
-        payantes: new Set(monthPayments.map((payment) => payment.agency_id)).size,
-      });
-    }
-    return out;
-  }, [payments, months]);
-
-  const handleRecord = (agency: { id: string; name: string }, subscription: { id: string }, plan: { name: string; price_monthly: number; currency: string } | null) => {
+  const handleRecord = (
+    agency: { id: string; name: string },
+    subscription: { id: string },
+    plan: { name: string; display_name: string | null; price_monthly: number; currency: string } | null,
+  ) => {
     setNotice('');
     setPageError('');
     recordPayment.mutate(
-      { agencyId: agency.id, subscriptionId: subscription.id, amount: Number(plan?.price_monthly ?? 0), planName: plan?.name },
+      {
+        agencyId: agency.id,
+        subscriptionId: subscription.id,
+        amount: Number(plan?.price_monthly ?? 0),
+        planName: plan?.display_name ?? plan?.name,
+      },
       {
         onSuccess: () => setNotice(`Paiement enregistré pour ${agency.name} — abonnement prolongé de 30 jours.`),
         onError: (error) => setPageError(getSupabaseErrorMessage(error, 'enregistrer le paiement')),
@@ -553,7 +551,21 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     );
   };
 
-  if (agenciesQ.isLoading || paymentsQ.isLoading) return <section className="admin-grid" aria-label="Abonnements"><LoadingRows label="Chargement des abonnements" /></section>;
+  if (agenciesQ.isLoading || revenueQ.isLoading) {
+    return <section className="admin-grid" aria-label="Abonnements"><LoadingRows label="Chargement des abonnements" /></section>;
+  }
+
+  if (revenueQ.error) {
+    return (
+      <section className="admin-grid" aria-label="Abonnements">
+        <div className="state-card error-state" role="alert" data-testid="status-subscription-revenue-error">
+          <h2>Abonnements indisponibles</h2>
+          <p>{getSupabaseErrorMessage(revenueQ.error, 'charger les abonnements')}</p>
+          <Button variant="outline" onClick={() => void revenueQ.refetch()}>Réessayer</Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="admin-grid abonnements-overview" aria-label="Abonnements">
@@ -561,7 +573,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         <div className="panel-head">
           <div>
             <h2>Abonnements payants</h2>
-            <p>Revenus d’abonnements enregistrés et agences payantes par mois · suspendues et essais exclus des payantes</p>
+            <p>Revenus par mois et agences payantes — calculés en base sur les paiements validés</p>
           </div>
           <div className="revenue-toolbar revenue-period-select" role="group" aria-label="Période des abonnements">
             {([6, 12] as const).map((value) => (
@@ -570,21 +582,32 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
           </div>
         </div>
         <div className="revenue-kpis">
-          <article className="kpi-card" data-testid="kpi-abo-revenus-mois"><span className="kpi-label">Revenus du mois</span><strong className="kpi-value">{cash(revenueMonth, 'XOF')}</strong><span className="kpi-foot">Paiements enregistrés ce mois</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-payantes"><span className="kpi-label">Agences payantes</span><strong className="kpi-value">{payingAgencies.length}</strong><span className="kpi-foot">Abonnement actif, agence non suspendue</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-essai"><span className="kpi-label">En essai</span><strong className="kpi-value">{trialAgencies.length}</strong><span className="kpi-foot">Abonnement en période d’essai</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-impayes"><span className="kpi-label">Suspendues ou impayées</span><strong className="kpi-value">{unpaidAgencies.length}</strong><span className="kpi-foot">Agence suspendue ou abonnement impayé/expiré/annulé</span></article>
+          <article className="kpi-card" data-testid="kpi-abo-revenus-mois"><span className="kpi-label">Revenus du mois</span><strong className="kpi-value">{cash(revenueMonth, 'XOF')}</strong><span className="kpi-foot">Paiements validés ce mois</span></article>
+          <article className="kpi-card" data-testid="kpi-abo-revenus-periode"><span className="kpi-label">Revenus sur {months} mois</span><strong className="kpi-value">{cash(Number(totals?.revenue_period ?? 0), 'XOF')}</strong><span className="kpi-foot">{totals?.payments_period ?? 0} paiement(s) · {totals?.paying_agencies_period ?? 0} agence(s)</span></article>
+          <article className="kpi-card" data-testid="kpi-abo-payantes"><span className="kpi-label">Agences payantes</span><strong className="kpi-value">{totals?.paying_agencies_active ?? 0}</strong><span className="kpi-foot">Abonnement actif</span></article>
+          <article className="kpi-card" data-testid="kpi-abo-essai"><span className="kpi-label">En essai</span><strong className="kpi-value">{totals?.trial_agencies ?? 0}</strong><span className="kpi-foot">Période d’essai en cours</span></article>
+          <article className="kpi-card" data-testid="kpi-abo-suspendues"><span className="kpi-label">Suspendues</span><strong className="kpi-value">{totals?.suspended_agencies ?? 0}</strong><span className="kpi-foot">Agence bloquée pour impayé ou décision admin</span></article>
           <article className="kpi-card" data-testid="kpi-abo-variation"><span className="kpi-label">Variation revenus</span><strong className="kpi-value"><span className={`trend-chip ${revenueVariation !== null && revenueVariation >= 0 ? 'is-up' : 'is-down'}`}>{revenueVariation === null ? '—' : `${revenueVariation >= 0 ? '+' : '−'}${Math.abs(revenueVariation).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`}</span></strong><span className="kpi-foot">vs mois précédent</span></article>
         </div>
-        {payments.length ? (
+        {(totals?.pending_declarations ?? 0) > 0 || (totals?.pending_plan_changes ?? 0) > 0 ? (
+          <div className="notice-box" role="status" data-testid="status-billing-queues">
+            <AlertTriangle size={14} />
+            <span>
+              {totals?.pending_declarations ?? 0} déclaration(s) de paiement et
+              {' '}{totals?.pending_plan_changes ?? 0} demande(s) de changement d’offre en attente.
+              {' '}<Link href="/admin/paiements" className="text-action">Traiter <ArrowRight size={12} /></Link>
+            </span>
+          </div>
+        ) : null}
+        {series.some((row) => row.revenus > 0) ? (
           <div className="chart-box" data-testid="chart-abonnements">
             <ResponsiveContainer width="100%" height={252}>
               <ComposedChart data={series} margin={{ top: 18, right: 6, left: -8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.12} vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                <YAxis yAxisId="left" tickLine={false} axisLine={false} fontSize={10} tickFormatter={(value: number) => compact(Number(value))} width={54} />
-                <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} fontSize={10} width={34} allowDecimals={false} />
-                <Tooltip formatter={(value: number, name: string) => (name === 'Revenus' ? [cash(Number(value), 'XOF'), name] : [value, name])} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--si-chart-grid)" vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} tick={{ fill: 'var(--si-chart-axis)' }} />
+                <YAxis yAxisId="left" tickLine={false} axisLine={false} fontSize={10} tickFormatter={(value: number) => compact(Number(value))} width={54} tick={{ fill: 'var(--si-chart-axis)' }} />
+                <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} fontSize={10} width={34} allowDecimals={false} tick={{ fill: 'var(--si-chart-axis)' }} />
+                <Tooltip formatter={(value: number, name: string) => (name === 'Revenus' ? [cash(Number(value), 'XOF'), name] : [value, name])} contentStyle={{ borderRadius: 10, fontSize: 13 }} />
                 <Bar yAxisId="left" dataKey="revenus" fill="var(--si-chart-1)" radius={[6, 6, 0, 0]} name="Revenus">
                   <LabelList dataKey="revenus" position="insideTop" formatter={(value: number) => compact(Number(value))} style={{ fontSize: 9.5, fontWeight: 700, fill: '#ffffff' }} />
                 </Bar>
@@ -597,17 +620,34 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         ) : (
           <div className="empty-table" data-testid="empty-abonnements-chart">
             <div className="empty-table-mark"><TrendingUp size={17} /></div>
-            <strong>Aucun paiement enregistré pour l’instant</strong>
-            <p>Les revenus apparaissent dès le premier « Paiement reçu ». Aucun paiement n’est automatisé à ce jour : l’enregistrement est manuel côté admin.</p>
+            <strong>Aucun paiement validé sur la période</strong>
+            <p>Les revenus apparaissent dès la première déclaration de paiement validée dans « Paiements et offres ».</p>
+            <Link href="/admin/paiements" className="text-action">Ouvrir la file de validation <ArrowRight size={13} /></Link>
           </div>
         )}
+        {revenue?.by_plan?.length ? (
+          <div className="plan-breakdown" data-testid="list-revenue-by-plan">
+            {revenue.by_plan.map((plan) => (
+              <div className="plan-row" key={plan.id} data-testid={`row-plan-revenue-${plan.name}`}>
+                <span>
+                  <strong>{plan.display_name ?? plan.name}</strong>
+                  <small>{plan.active_agencies} active(s) · {plan.trial_agencies} essai · {plan.total_agencies} au total</small>
+                </span>
+                <span className="plan-price">
+                  {cash(Number(plan.revenue_total ?? 0), plan.currency)}
+                  <small>{cash(Number(plan.price_monthly), plan.currency)}/mois</small>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </article>
 
       <article className="panel">
         <div className="panel-head">
           <div>
             <h2>Agences et abonnements</h2>
-            <p>Statut d’abonnement de chaque agence — calcul automatique depuis le statut et la formule</p>
+            <p>Statut d’abonnement de chaque agence — offre réelle appliquée</p>
           </div>
           <Link href="/admin/abonnements" className="text-action" data-testid="link-admin-manage-subscriptions">Gérer <ArrowRight size={13} /></Link>
         </div>
@@ -626,7 +666,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
                       <td><strong>{agency.name}</strong><small>{agency.city ?? agency.country}</small></td>
                       <td><span className={`status-pill status-${agency.status === 'active' ? 'available' : agency.status === 'suspended' ? 'unavailable' : 'reserved'}`}>{agency.status === 'active' ? 'Active' : agency.status === 'suspended' ? 'Suspendue' : agency.status}</span></td>
                       <td><span className={`status-pill status-${sub?.status === 'active' ? 'available' : sub?.status === 'trial' ? 'reserved' : 'unavailable'}`} data-testid={`pill-abo-${agency.id}`}>{sub ? subscriptionStatusLabel[sub.status] ?? sub.status : 'Aucun'}</span></td>
-                      <td>{plan ? `${plan.name} · ${cash(Number(plan.price_monthly), plan.currency)}` : '—'}</td>
+                      <td>{plan ? `${plan.display_name ?? plan.name} · ${cash(Number(plan.price_monthly), plan.currency)}` : '—'}</td>
                       <td>{sub?.ends_at ? dateLabel(sub.ends_at) : sub?.trial_ends_at ? `Essai : ${dateLabel(sub.trial_ends_at)}` : '—'}</td>
                       <td className="row-actions-cell">
                         {sub ? (

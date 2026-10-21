@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
   Activity,
@@ -13,24 +13,39 @@ import {
   LogOut,
   Menu,
   Search,
+  Settings2,
   ShieldCheck,
   TrendingUp,
+  Wallet,
   X,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/lib/auth-context';
 import { usePlatformRole, useAllAgencies, useAllProperties, useAllContacts } from '@/lib/data-hooks';
+import { useSubscriptionRevenue } from '@/lib/admin-billing-api';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { BrandMark } from '@/lib/workspace-ui';
 import { ThemeToggle } from '@/lib/theme';
 
-const adminNav = [
+type AdminNavItem = {
+  href: string;
+  label: string;
+  icon: ComponentType<{ size?: number | string }>;
+  exact?: boolean;
+  /** Clé du compteur affiché en pastille, calculé depuis la base. */
+  badge?: 'pendingBilling';
+};
+
+const adminNav: AdminNavItem[] = [
   { href: '/admin', label: 'Vue d’ensemble', icon: LayoutDashboard, exact: true },
   { href: '/admin/agences', label: 'Agences', icon: Building2 },
   { href: '/admin/biens', label: 'Biens & contenus', icon: Home },
   { href: '/admin/abonnements', label: 'Abonnements', icon: CreditCard },
+  // BLOC 2 : file de validation des paiements et demandes de changement d'offre.
+  { href: '/admin/paiements', label: 'Paiements & offres', icon: Wallet, badge: 'pendingBilling' },
   { href: '/admin/ca', label: 'Chiffre d’affaires', icon: TrendingUp },
   { href: '/admin/activite', label: 'Activité & alertes', icon: Activity },
+  { href: '/admin/reglages', label: 'Réglages', icon: Settings2 },
 ];
 
 type SearchHit = { kind: 'agence' | 'bien' | 'contact'; id: string; title: string; subtitle: string; href: string };
@@ -108,6 +123,13 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const name = roleQ.data?.profile?.full_name || user?.email || 'Administration';
+  // BLOC 2 : pastille « Paiements & offres » = déclarations + demandes en attente.
+  // Un seul appel (RPC déjà utilisé par la vue d'ensemble), mis en cache.
+  const queuesQ = useSubscriptionRevenue(1);
+  const pendingBilling =
+    Number(queuesQ.data?.totals?.pending_declarations ?? 0) +
+    Number(queuesQ.data?.totals?.pending_plan_changes ?? 0);
+  const badges: Record<string, number> = { pendingBilling };
 
   const handleSignOut = async () => {
     try {
@@ -130,8 +152,9 @@ export default function AdminShell({ children }: { children: ReactNode }) {
         </Link>
         <div className="nav-label">Pilotage</div>
         <nav className="nav-list" aria-label="Navigation administration">
-          {adminNav.map(({ href, label, icon: Icon, exact }) => {
+          {adminNav.map(({ href, label, icon: Icon, exact, badge }) => {
             const active = exact ? path === href : path.startsWith(href);
+            const count = badge ? badges[badge] ?? 0 : 0;
             return (
               <Link
                 key={href}
@@ -143,6 +166,11 @@ export default function AdminShell({ children }: { children: ReactNode }) {
               >
                 <Icon size={16} />
                 <span>{label}</span>
+                {count > 0 && (
+                  <em className="nav-badge" data-testid={`badge-admin-nav-${href.replace('/admin', '') || 'overview'}`}>
+                    {count > 9 ? '9+' : count}
+                  </em>
+                )}
               </Link>
             );
           })}

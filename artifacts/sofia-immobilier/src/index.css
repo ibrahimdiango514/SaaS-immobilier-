@@ -2990,3 +2990,106 @@ input, .form-select, textarea {
   .declaration-state { grid-column: 1 / -1; justify-items: start; text-align: left; }
   .payment-panel .panel-head .primary-action { width: 100%; justify-content: center; }
 }
+
+/* =============================================================================
+   BLOC 2 — ADMIN : paiements à valider, demandes d'offre, réglages
+   ============================================================================= */
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--si-gold);
+  color: #231a06;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.review-queue-summary { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.queue-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 10px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--si-border);
+  background: var(--si-panel);
+  color: var(--si-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.queue-pill strong {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--si-border-soft);
+  color: var(--si-text);
+  font-size: 11.5px;
+}
+.queue-pill.is-active { border-color: var(--si-border-brand); color: var(--si-brand-text); }
+.queue-pill.is-active strong { background: var(--si-brand); color: #fff; }
+
+.review-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); align-items: start; }
+.review-card {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border-radius: 13px;
+  border: 1px solid var(--si-border-soft);
+  background: var(--si-panel);
+  box-shadow: var(--si-shadow-soft);
+}
+.review-card.is-pending { border-color: var(--si-border-gold); }
+.review-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.review-card-head strong { display: block; font-size: 14.5px; color: var(--si-text); }
+.review-card-head small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--si-text-muted); }
+.review-status.is-approved { background: var(--si-success); color: #fff; }
+.review-status.is-rejected { background: var(--si-danger); color: #fff; }
+.review-status.is-pending { background: var(--si-gold); color: #231a06; }
+
+.review-facts { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.review-facts > div { display: grid; gap: 2px; padding: 9px 11px; border-radius: 9px; background: var(--si-panel-subtle); }
+.review-facts span { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--si-text-muted); }
+.review-facts strong { font-size: 13.5px; color: var(--si-text); word-break: break-word; }
+.review-facts strong.mono { font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+
+.review-proof { display: flex; align-items: center; gap: 10px; }
+.proof-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--si-border-brand);
+  color: var(--si-brand-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.proof-link:hover { background: var(--si-tint-soft, var(--si-panel-subtle)); }
+.proof-none { font-size: 12.5px; color: var(--si-text-muted); }
+.proof-none.is-error { color: var(--si-danger-text); }
+
+.review-note { margin: 0; font-size: 12.5px; color: var(--si-text-muted); }
+.review-note.is-rejected { color: var(--si-danger-text); }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 11px; border-top: 1px solid var(--si-border-soft); }
+
+.plan-switch { display: flex; align-items: center; gap: 7px; }
+.plan-switch .form-select { min-width: 150px; }
+.plan-breakdown .plan-price small { display: block; font-size: 11px; color: var(--si-text-muted); }
+
+@media (max-width: 720px) {
+  .review-grid { grid-template-columns: 1fr; }
+  .plan-switch { flex-wrap: wrap; }
+  .queue-pill { flex: 1 1 100%; justify-content: space-between; }
+}
