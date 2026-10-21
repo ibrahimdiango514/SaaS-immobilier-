@@ -122,7 +122,11 @@ function AppShell({ children }: { children: ReactNode }) {
   const name = profile?.full_name || user?.email || 'Mon compte';
   // LOT A (point 4) : un agent n'a pas acces a la gestion de l'equipe.
   const isAgentOnly = activeMembership?.role === 'agent';
-  const visibleNav = isAgentOnly ? nav.filter((item) => item.href !== '/equipe') : nav;
+  // BLOC 10 (roles) : un agent n'a acces ni a l'Equipe, ni a Mon offre
+  // (paiements, offre, consommation). Le filtrage de la navigation seul ne
+  // suffit pas : les routes sont aussi gardees (voir RequireManager ci-dessous).
+  const agentHiddenRoutes = ['/equipe', '/mon-offre'];
+  const visibleNav = isAgentOnly ? nav.filter((item) => !agentHiddenRoutes.includes(item.href)) : nav;
   // BLOC 9 : journal des routes internes -> le bouton retour ne sort jamais de l'app.
   useEffect(() => { trackRoute(path); }, [path]);
   const currentLabel = nav.find((item) => item.href === path)?.label ?? (path.startsWith('/biens/') ? 'Fiche bien' : path.startsWith('/contacts/') ? 'Fiche contact' : 'Espace de travail');
@@ -271,7 +275,11 @@ function WorkspaceGate({ children }: { children: ReactNode }) {
 }
 
 function Overview() {
-  const { activeAgencyId } = useAgency();
+  const { activeAgencyId, activeMembership } = useAgency();
+  // BLOC 10 (roles) : le chiffre d'affaires est reserve au proprietaire et aux
+  // administrateurs de l'agence. Un agent (ou un role non gestionnaire) ne voit
+  // ni le panneau CA, ni ses indicateurs.
+  const canSeeRevenue = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
   const summary = useDashboardSummary(activeAgencyId);
   const revenueQ = useRevenueOperations(activeAgencyId);
   const [caPeriod, setCaPeriod] = useState<'month' | 'm6' | 'm12' | 'year'>('m6');
@@ -314,6 +322,7 @@ function Overview() {
     <div className="insight-grid"><DailySummaryCard /><SmartAlertsCard /></div>
     <section className="stat-grid stat-grid-eight" aria-label="Indicateurs de l’agence">{stats.map(({ label, count, foot, icon: Icon }, i) => <article className="stat-card" key={label} data-testid={`card-stat-${i + 1}`}><div className="stat-top"><span>{label}</span><span className="stat-icon"><Icon size={14} /></span></div><div className="stat-value" data-testid={`value-stat-${i + 1}`}>{count}</div><div className="stat-foot">{foot}</div></article>)}</section>
 
+    {canSeeRevenue && (
     <section className="panel revenue-overview-panel" data-testid="panel-ca-dashboard">
       <div className="panel-head">
         <div><h2><Wallet size={17} /> Chiffre d’affaires</h2><p>Commissions calculées automatiquement à chaque vente ou location · volume des transactions affiché en secondaire</p></div>
@@ -353,6 +362,7 @@ function Overview() {
         <div className="empty-table" data-testid="empty-ca-dashboard"><div className="empty-table-mark"><Wallet size={17} /></div><strong>Aucune opération sur cette période</strong><p>Le chiffre d’affaires se remplit automatiquement dès qu’un bien passe en vendu ou loué.</p></div>
       )}
     </section>
+    )}
     <section className="overview-grid"><article className="panel"><div className="panel-head"><div><h2>Biens récemment ajoutés</h2><p>Les derniers dossiers du portefeuille</p></div><Link href="/biens" className="text-action" data-testid="link-view-properties">Tous les biens <ArrowRight size={13} /></Link></div>
        {properties.error ? <ErrorState error={properties.error} retry={useSafeRetry(properties)} testId="status-recent-properties-error" /> : latest.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Référence</th><th>Bien</th><th>Localisation</th><th>Statut</th></tr></thead><tbody>{latest.map((p) => <tr key={p.id} data-testid={`row-recent-property-${p.id}`}><td><strong>{p.reference}</strong></td><td>{p.title}</td><td>{p.neighborhood || p.city || '—'}</td><td><span className={`status-pill status-${p.status}`}>{propertyStatus[p.status] ?? p.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-table" data-testid="empty-recent-properties"><div className="empty-table-mark"><Home size={17} /></div><strong>Aucun bien enregistré</strong><p>Les biens ajoutés par votre équipe apparaîtront ici.</p><Link href="/biens" className="text-action" data-testid="link-add-first-property">Ajouter un bien <ArrowRight size={13} /></Link></div>}</article>
        <article className="panel readiness-panel"><div className="readiness-title"><h2>Repères d’agence</h2><span>Vue du jour</span></div><p className="readiness-intro">Conversion observée : {conversion}. Définition : opportunités reliées à un bien vendu ou loué / opportunités chargées.</p><div className="readiness-list"><Link href="/biens" className="readiness-row" data-testid="link-overview-properties"><div className="readiness-icon"><Home size={14} /></div><div className="readiness-copy"><strong>Biens disponibles</strong><span>{summary.data?.availableProperties ?? 0} actuellement en commercialisation</span></div><ArrowRight size={14} /></Link><Link href="/contacts" className="readiness-row" data-testid="link-overview-contacts"><div className="readiness-icon"><ContactRound size={14} /></div><div className="readiness-copy"><strong>Contacts actifs</strong><span>{summary.data?.activeContacts ?? 0} fiches non inactives</span></div><ArrowRight size={14} /></Link><Link href="/pipeline" className="readiness-row" data-testid="link-overview-pipeline"><div className="readiness-icon"><SlidersHorizontal size={14} /></div><div className="readiness-copy"><strong>Pipeline commercial</strong><span>{summary.data?.opportunities ?? 0} opportunités à suivre</span></div><ArrowRight size={14} /></Link></div><div className="notice-box"><CircleHelp size={14} /> Les membres sont visibles par rôle uniquement afin de préserver la confidentialité de leurs profils.</div></article></section>

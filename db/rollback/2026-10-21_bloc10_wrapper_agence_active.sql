@@ -1,0 +1,11 @@
+-- =============================================================================
+-- ROLLBACK — wrapper public.agence_active (BLOC 10)
+--
+-- ⚠️ Supprimer ce wrapper RECASSE les trois Edge Functions qui l'appellent :
+--    create-agency-member, invite-agency-member, dashboard-assistant
+--    (elles renverront à nouveau `agency_suspended` pour toute agence).
+--    À n'exécuter que si le wrapper pose problème ; dans ce cas il faut aussi
+--    redéployer ces fonctions pour qu'elles appellent
+--    `client.schema('saas_immobilier').rpc('agence_active', { p_agency_id })`.
+-- =============================================================================
+DROP FUNCTION IF EXISTS public.agence_active(uuid);

@@ -158,6 +158,25 @@ export default function MyOfferPage() {
   const requestChange = useRequestPlanChange(activeAgencyId);
   const [notice, setNotice] = useState('');
 
+  // BLOC 10 (roles) : « Mon offre » regroupe l'abonnement, les declarations de
+  // paiement et la consommation. Reserve au proprietaire et aux administrateurs.
+  // Garde placee apres tous les hooks (regle des hooks de React).
+  if (!canManageAgency) {
+    return (
+      <>
+        <Heading eyebrow="Abonnement" title="Mon offre" description="Offre active, limites et paiement." />
+        <div className="permission-note" role="status" data-testid="status-offer-permission">
+          <Lock size={15} />
+          <span>
+            L’offre, les paiements et la consommation de l’agence sont réservés au
+            propriétaire et aux administrateurs. Votre rôle ne permet pas d’y
+            accéder. Les règles d’accès définies côté base restent prioritaires.
+          </span>
+        </div>
+      </>
+    );
+  }
+
   if (usage.isLoading) {
     return <><Heading eyebrow="Abonnement" title="Mon offre" description="Offre active, limites et paiement." /><LoadingRows label="Chargement de l’offre" /></>;
   }

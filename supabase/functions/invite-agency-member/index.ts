@@ -57,7 +57,11 @@ Deno.serve(async (request) => {
   if (allowedError || allowed !== true) return json({ error: 'agency_admin_or_owner_required' }, 403)
 
   // 3. Agence non suspendue
-  const { data: active, error: activeError } = await callerClient.rpc('agence_active', { agency_id: agencyId })
+  // BLOC 10 : `agence_active` attend `p_agency_id` (et non `agency_id`), et
+  // PostgREST résout le RPC dans `public` — d'où le wrapper public.agence_active.
+  // Avec l'ancien nom de paramètre l'appel échouait toujours et la fonction
+  // renvoyait `agency_suspended` pour TOUTE agence, même active.
+  const { data: active, error: activeError } = await callerClient.rpc('agence_active', { p_agency_id: agencyId })
   if (activeError || active !== true) return json({ error: 'agency_suspended' }, 403)
 
   // 4. Limite d'utilisateurs non atteinte — invitations en attente comprises.
