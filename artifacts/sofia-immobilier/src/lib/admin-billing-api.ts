@@ -218,6 +218,11 @@ function invalidateBilling(queryClient: ReturnType<typeof useQueryClient>) {
     // Les agences lisent leur état via ces clés : on force le rafraîchissement.
     queryClient.invalidateQueries({ queryKey: ['sofia'] }),
     queryClient.invalidateQueries({ queryKey: ['offre'] }),
+    // BLOC 1 (session 3) — cause racine n°3 : les graphiques et KPI ne bougeaient
+    // pas après une validation de paiement / un changement d'offre / une
+    // suspension. Ces deux clés n'étaient pas invalidées.
+    queryClient.invalidateQueries({ queryKey: ['plan'] }),
+    queryClient.invalidateQueries({ queryKey: getSubscriptionRevenueQueryKey(12) }),
   ]);
 }
 

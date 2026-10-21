@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Check, Copy, KeyRound, Link2, LockKeyhole, MessageCircle, RotateCcw, ShieldCheck,
+  Check, Copy, KeyRound, Link2, LockKeyhole, MessageCircle, RotateCcw, ShieldAlert, ShieldCheck,
   UserPlus, UserRound, UserX, UsersRound, X,
 } from 'lucide-react';
 import { ButtonPrimary, ErrorState, Heading, LoadingRows, roleNames, useSafeRetry, safeFormat } from '@/lib/workspace-ui';
@@ -13,7 +13,7 @@ import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 import {
   createAgencyInvitation, createAgencyMember, fetchSeatInfo, resetAgentPassword,
-  teamErrorLabel, type CreatedInvitation, type SeatInfo, type TeamRole,
+  teamErrorLabel, teamErrorDiagnostic, type CreatedInvitation, type SeatInfo, type TeamRole,
 } from '@/lib/agency-team-api';
 
 interface TeamMember {
@@ -148,6 +148,8 @@ export default function TeamPage() {
   const [role, setRole] = useState<TeamRole>('agent');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  // BLOC 1 (session 3) : diagnostic exact (étape + code + message) en cas d'échec.
+  const [diagnostic, setDiagnostic] = useState<ReturnType<typeof teamErrorDiagnostic> | null>(null);
   const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null);
   const [invitation, setInvitation] = useState<CreatedInvitation | null>(null);
   const [invitingRole, setInvitingRole] = useState<TeamRole>('agent');
@@ -175,6 +177,7 @@ export default function TeamPage() {
     if (!activeAgencyId || busy) return;
     setBusy(true);
     setMessage('');
+    setDiagnostic(null);
     setCreated(null);
     try {
       const result = await createAgencyMember({ agencyId: activeAgencyId, fullName, email, role });
@@ -185,6 +188,7 @@ export default function TeamPage() {
       await refresh();
     } catch (error) {
       setMessage(teamErrorLabel(error));
+      setDiagnostic(teamErrorDiagnostic(error, 'création directe du compte agent'));
     } finally {
       setBusy(false);
     }
@@ -194,6 +198,7 @@ export default function TeamPage() {
     if (!activeAgencyId || busy) return;
     setBusy(true);
     setMessage('');
+    setDiagnostic(null);
     setInvitation(null);
     try {
       const result = await createAgencyInvitation({ agencyId: activeAgencyId, role: invitingRole });
@@ -202,6 +207,7 @@ export default function TeamPage() {
       await refresh();
     } catch (error) {
       setMessage(teamErrorLabel(error));
+      setDiagnostic(teamErrorDiagnostic(error, 'génération du lien d’invitation'));
     } finally {
       setBusy(false);
     }
@@ -238,6 +244,7 @@ export default function TeamPage() {
       await refresh();
     } catch (error) {
       setMessage(teamErrorLabel(error));
+      setDiagnostic(teamErrorDiagnostic(error, 'réinitialisation du mot de passe'));
       setResetTarget(null);
     } finally {
       setResetBusy(false);
@@ -486,6 +493,21 @@ export default function TeamPage() {
         <p className={message.includes('échoué') || message.includes('atteinte') || message.includes('réservée') || message.includes('incorrect') ? 'form-error' : 'form-feedback'} role="status" data-testid="status-team-message">
           {message}
         </p>
+      )}
+
+      {/* BLOC 1 (session 3) — DIAGNOSTIC : étape, code, message exact.
+          Plus jamais d'échec silencieux sur la création d'un agent. */}
+      {diagnostic && (
+        <div className="state-card compact-empty" role="alert" data-testid="panel-team-diagnostic">
+          <div className="state-icon"><ShieldAlert size={19} /></div>
+          <h2>Échec à l’étape : {diagnostic.step}</h2>
+          <p><strong>Code :</strong> {diagnostic.code}</p>
+          {diagnostic.httpStatus ? <p><strong>HTTP :</strong> {diagnostic.httpStatus}</p> : null}
+          {diagnostic.technicalCode ? <p><strong>Code technique :</strong> {diagnostic.technicalCode}</p> : null}
+          {diagnostic.details ? <p><strong>Détail serveur :</strong> {diagnostic.details}</p> : null}
+          <p className="form-hint">Transmettez ces informations au support si l’échec persiste.</p>
+          <button type="button" className="button-link" onClick={() => setDiagnostic(null)}>Masquer le diagnostic</button>
+        </div>
       )}
     </>
   );

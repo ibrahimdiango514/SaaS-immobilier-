@@ -46,7 +46,87 @@ export interface UpgradeTarget {
 }
 
 export const getAgencyPlanQueryKey = (agencyId?: string) => ['plan', 'agence', agencyId] as const;
+export const getAgencyPlanStateQueryKey = (agencyId?: string) => ['plan', 'etat', agencyId] as const;
 export const getUpgradeTargetsQueryKey = () => ['plan', 'cibles'] as const;
+
+/**
+ * BLOC 1 (session 3) — État cohérent de l'offre, lu depuis UNE seule source :
+ * `public.agency_plan_state(agency_id)`.
+ *
+ * `state` peut valoir : active | trial | overdue | suspended_overdue |
+ * no_plan | pending | cancelled | suspended | missing.
+ *
+ * `is_locked` ne vaut vrai QUE pour pending / suspended / suspended_overdue :
+ * une agence sans offre ou en retard garde son espace de travail ouvert, avec
+ * un état explicatif et l'action à faire. C'est la règle demandée au BLOC 1.
+ */
+export type AgencyPlanStateValue =
+  | 'active'
+  | 'trial'
+  | 'overdue'
+  | 'suspended_overdue'
+  | 'no_plan'
+  | 'pending'
+  | 'cancelled'
+  | 'suspended'
+  | 'missing';
+
+export interface AgencyPlanState {
+  found: boolean;
+  agency_id?: string;
+  agency_status?: string;
+  state: AgencyPlanStateValue;
+  has_plan: boolean;
+  subscription_id?: string | null;
+  subscription_status?: string | null;
+  plan_id?: string | null;
+  plan_name?: string | null;
+  plan_price_monthly?: number | null;
+  plan_setup_fee?: number | null;
+  currency?: string | null;
+  trial_ends_at?: string | null;
+  trial_days_left?: number | null;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  days_to_due?: number | null;
+  grace_days?: number;
+  is_locked: boolean;
+  requires_action: boolean;
+}
+
+/** Libellés affichés partout (badges, bandeaux, console admin). */
+export const AGENCY_STATE_LABELS: Record<AgencyPlanStateValue, string> = {
+  active: 'Active',
+  trial: 'Essai',
+  overdue: 'En retard',
+  suspended_overdue: 'Suspendue (impayé)',
+  no_plan: 'Sans offre',
+  pending: 'En validation',
+  cancelled: 'Résiliée',
+  suspended: 'Suspendue',
+  missing: 'Introuvable',
+};
+
+export function agencyStateLabel(state?: AgencyPlanStateValue | string | null): string {
+  if (!state) return '—';
+  return AGENCY_STATE_LABELS[state as AgencyPlanStateValue] ?? String(state);
+}
+
+/** État de l'offre de l'agence — RPC `agency_plan_state`. */
+export function useAgencyPlanState(agencyId?: string) {
+  return useQuery({
+    queryKey: getAgencyPlanStateQueryKey(agencyId),
+    enabled: Boolean(agencyId),
+    staleTime: 30_000,
+    queryFn: async (): Promise<AgencyPlanState | null> => {
+      const { data, error } = await rpc().rpc('agency_plan_state', {
+        p_agency_id: agencyId as string,
+      });
+      if (error) throw error;
+      return (data as AgencyPlanState | null) ?? null;
+    },
+  });
+}
 
 /** Offre active de l'agence — `public.agency_current_plan`, déjà en base. */
 export function useAgencyPlan(agencyId?: string) {

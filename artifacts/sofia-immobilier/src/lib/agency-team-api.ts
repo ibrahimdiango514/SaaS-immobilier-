@@ -134,6 +134,43 @@ export function teamErrorLabel(error: unknown): string {
   return message || 'Une erreur est survenue. Réessayez.';
 }
 
+/**
+ * BLOC 1 (session 3) — DIAGNOSTIC AFFICHABLE.
+ * Exigence : afficher l'erreur exacte (étape + code + message) au lieu d'un
+ * échec silencieux. `step` est fourni par l'appelant (« création du compte »,
+ * « lien d'invitation »...), le reste vient de la réponse de l'Edge Function.
+ */
+export interface TeamErrorDiagnostic {
+  step: string;
+  code: string;
+  technicalCode: string | null;
+  httpStatus: number | null;
+  details: string | null;
+  message: string;
+}
+
+export function teamErrorDiagnostic(error: unknown, step: string): TeamErrorDiagnostic {
+  if (error instanceof EdgeFunctionError) {
+    return {
+      step,
+      code: error.errorCode,
+      technicalCode: error.technicalCode,
+      httpStatus: error.httpStatus,
+      details: error.details,
+      message: teamErrorLabel(error),
+    };
+  }
+  const candidate = error as { code?: string; message?: string; details?: string } | null;
+  return {
+    step,
+    code: candidate?.code ?? 'unknown_error',
+    technicalCode: null,
+    httpStatus: null,
+    details: candidate?.details ?? null,
+    message: teamErrorLabel(error),
+  };
+}
+
 type EdgeErrorPayload = { error?: string; details?: string | null; code?: string | null };
 
 async function invoke<T>(slug: string, body: Record<string, unknown>): Promise<T> {

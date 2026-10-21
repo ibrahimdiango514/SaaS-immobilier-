@@ -13,14 +13,19 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   useAllAgencies,
   useAllProperties,
   useActivityLog,
   useAdminUpdateAgency,
+  getAllAgenciesQueryKey,
+  getPlatformSummaryQueryKey,
+  getSubscriptionsQueryKey,
+  getActivityLogQueryKey,
 } from '@/lib/data-hooks';
 import type { AgencyRow } from '@/lib/database.types';
-import { getSupabaseErrorMessage } from '@/lib/supabase';
+import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
 import { LoadingRows, cash, dateLabel, dateTimeLabel, downloadCsv, roleNames } from '@/lib/workspace-ui';
 
@@ -39,23 +44,56 @@ const subscriptionStatus: Record<string, string> = {
   past_due: 'Impayé',
 };
 
+/**
+ * BLOC 1 (session 3) — état EFFECTIF d'une agence, identique à celui renvoyé par
+ * `public.agency_plan_state`. La liste admin ne doit jamais masquer une agence :
+ * les 6 états demandés (essai, en attente, active, en retard, suspendue, sans
+ * offre) sont tous représentables et filtrables.
+ */
+const planStates = ['active', 'trial', 'pending', 'overdue', 'suspended', 'no_plan'] as const;
+const planStateLabels: Record<string, string> = {
+  active: 'Active',
+  trial: 'Essai',
+  pending: 'En attente',
+  overdue: 'En retard',
+  suspended: 'Suspendue',
+  no_plan: 'Sans offre',
+  cancelled: 'Résiliée',
+};
+
 export default function AdminAgenciesPage() {
   const agenciesQ = useAllAgencies();
   const propertiesQ = useAllProperties();
   const activityQ = useActivityLog(300);
   const updateAgency = useAdminUpdateAgency();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [detail, setDetail] = useState<AgencyRow | null>(null);
   const [pageError, setPageError] = useState('');
 
-  const rows = useMemo(() => {
-    const needle = search.trim().toLocaleLowerCase('fr');
-    return (agenciesQ.data?.agencies ?? []).filter((agency) => {
-      const haystack = `${agency.name} ${agency.slug} ${agency.city ?? ''} ${agency.email ?? ''} ${agency.phone ?? ''}`.toLocaleLowerCase('fr');
-      return (!needle || haystack.includes(needle)) && (statusFilter === 'all' || agency.status === statusFilter);
-    });
-  }, [agenciesQ.data?.agencies, search, statusFilter]);
+  // BLOC 1 : changement d'offre en un clic, via la fonction unique côté base.
+  const changePlan = useMutation({
+    mutationFn: async ({ agencyId, planId }: { agencyId: string; planId: string }) => {
+      const client = getSupabaseClient() as unknown as {
+        rpc: (fn: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+      };
+      const { error } = await client.rpc('admin_change_agency_plan', {
+        p_agency_id: agencyId,
+        p_plan_id: planId,
+      });
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getAllAgenciesQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getPlatformSummaryQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getSubscriptionsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['plan'] }),
+      ]);
+    },
+  });
 
   const subscriptionFor = (agencyId: string) =>
     agenciesQ.data?.subscriptions.find((subscription) => subscription.agency_id === agencyId) ?? null;
@@ -64,6 +102,32 @@ export default function AdminAgenciesPage() {
     (agenciesQ.data?.members ?? []).filter((member) => member.agency_id === agencyId);
   const propertyCountFor = (agencyId: string) =>
     (propertiesQ.data ?? []).filter((property) => property.agency_id === agencyId).length;
+
+  const planStateFor = (agency: AgencyRow): string => {
+    const subscription = subscriptionFor(agency.id);
+    if (agency.status === 'pending') return 'pending';
+    if (agency.status === 'suspended') return 'suspended';
+    if (!subscription) return 'no_plan';
+    if (subscription.status === 'trial' && subscription.trial_ends_at && new Date(subscription.trial_ends_at) > new Date()) return 'trial';
+    if (subscription.ends_at && new Date(subscription.ends_at) < new Date()) return 'overdue';
+    return subscription.status;
+  };
+
+  const rows = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase('fr');
+    return (agenciesQ.data?.agencies ?? []).filter((agency) => {
+      const haystack = `${agency.name} ${agency.slug} ${agency.city ?? ''} ${agency.email ?? ''} ${agency.phone ?? ''}`.toLocaleLowerCase('fr');
+      const subscription = agenciesQ.data?.subscriptions.find((item) => item.agency_id === agency.id) ?? null;
+      let state: string;
+      if (agency.status === 'pending') state = 'pending';
+      else if (agency.status === 'suspended') state = 'suspended';
+      else if (!subscription) state = 'no_plan';
+      else if (subscription.status === 'trial' && subscription.trial_ends_at && new Date(subscription.trial_ends_at) > new Date()) state = 'trial';
+      else if (subscription.ends_at && new Date(subscription.ends_at) < new Date()) state = 'overdue';
+      else state = subscription.status;
+      return (!needle || haystack.includes(needle)) && (statusFilter === 'all' || state === statusFilter);
+    });
+  }, [agenciesQ.data?.agencies, agenciesQ.data?.subscriptions, search, statusFilter]);
 
   const changeStatus = (agency: AgencyRow, nextStatus: string) => {
     const verb = nextStatus === 'active' ? 'réactiver' : 'suspendre';
@@ -142,8 +206,10 @@ export default function AdminAgenciesPage() {
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Nom, ville, e-mail…" aria-label="Rechercher une agence" data-testid="input-search-admin-agencies" />
         </label>
         <select className="form-select compact-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtrer par statut" data-testid="filter-admin-agency-status">
-          <option value="all">Tous les statuts</option>
-          {Object.entries(agencyStatus).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          <option value="all">Tous les statuts ({agenciesQ.data?.agencies.length ?? 0})</option>
+          {planStates.map((key) => (
+            <option key={key} value={key}>{planStateLabels[key]}</option>
+          ))}
         </select>
         <span className="result-count">{rows.length} agence(s)</span>
       </section>
@@ -186,8 +252,11 @@ export default function AdminAgenciesPage() {
                       <td>{propertyCountFor(agency.id)}</td>
                       <td>
                         <div className="agency-status-cell">
-                          <span className={`status-pill status-${agency.status === 'active' ? 'available' : agency.status === 'pending' ? 'reserved' : 'unavailable'}`}>
-                            {agencyStatus[agency.status] ?? agency.status}
+                          <span
+                            className={`status-pill ${planStateFor(agency) === 'active' ? 'status-available' : planStateFor(agency) === 'pending' || planStateFor(agency) === 'trial' ? 'status-reserved' : 'status-unavailable'}`}
+                            data-testid={`pill-plan-state-${agency.id}`}
+                          >
+                            {planStateLabels[planStateFor(agency)] ?? agencyStatus[agency.status] ?? agency.status}
                           </span>
                           <span className={`status-pill mini-indicator ${agency.status === 'suspended' ? 'status-unavailable' : 'status-available'}`} data-testid={`pill-dashboard-${agency.id}`}>
                             Dashboard {agency.status === 'suspended' ? 'désactivé' : 'actif'}
@@ -258,7 +327,14 @@ export default function AdminAgenciesPage() {
                   {(() => {
                     const subscription = subscriptionFor(detail.id);
                     const plan = subscription ? planFor(subscription.plan_id) : null;
-                    if (!subscription || !plan) return <p>Aucun abonnement enregistré.</p>;
+                    if (!subscription || !plan) {
+                      return (
+                        <p className="form-hint">
+                          Aucun abonnement enregistré (état : {planStateLabels[planStateFor(detail)] ?? 'sans offre'}).
+                          Choisissez une offre ci-dessous : elle sera créée immédiatement.
+                        </p>
+                      );
+                    }
                     return (
                       <p>
                         <strong>{plan.name}</strong> — {cash(Number(plan.price_monthly), plan.currency)}/mois ·{' '}
@@ -268,6 +344,38 @@ export default function AdminAgenciesPage() {
                       </p>
                     );
                   })()}
+
+                  {/* BLOC 1 : changement d'offre en un clic, sans quitter la fiche. */}
+                  <label className="field" style={{ marginTop: 12 }}>
+                    <span>Changer d’offre</span>
+                    <select
+                      className="form-select"
+                      value={subscriptionFor(detail.id)?.plan_id ?? ''}
+                      disabled={changePlan.isPending}
+                      onChange={(event) => {
+                        const planId = event.target.value;
+                        if (!planId) return;
+                        setPageError('');
+                        changePlan.mutate(
+                          { agencyId: detail.id, planId },
+                          { onError: (error) => setPageError(getSupabaseErrorMessage(error, 'changer l’offre')) },
+                        );
+                      }}
+                      data-testid="select-change-plan"
+                    >
+                      <option value="">— Choisir une offre —</option>
+                      {(agenciesQ.data?.plans ?? []).map((plan) => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.display_name ?? plan.name} · {cash(Number(plan.price_monthly), plan.currency)}/mois
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {changePlan.error && (
+                    <p className="form-error" role="alert">
+                      {getSupabaseErrorMessage(changePlan.error, 'changer l’offre')}
+                    </p>
+                  )}
                 </div>
 
                 <div className="detail-section">

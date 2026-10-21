@@ -94,7 +94,17 @@ export type ModuleAccess = {
   error: Error | null;
   plan: CurrentPlan | null;
   planName: string;
+  /** BLOC 1 : aucune offre exploitable → état explicatif, jamais un écran muet. */
+  planMissing: boolean;
 };
+
+/**
+ * Routes qui ne sont JAMAIS verrouillées, même sans offre : l'agence doit
+ * pouvoir comprendre sa situation et agir (BLOC 1). « Mon offre » et
+ * « Paramètres » ne figurent pas dans ROUTE_MODULE, elles sont donc déjà
+ * toujours accessibles.
+ */
+const NEVER_LOCKED_MODULES = new Set<string>(['dashboard']);
 
 /**
  * Accès aux modules de l'agence active. Une seule source : `agency_current_plan`
@@ -105,6 +115,7 @@ export function useModuleAccess(agencyId?: string): ModuleAccess {
   const plan = (planQ.data ?? null) as CurrentPlan | null;
   const included = new Set<string>(plan?.modules ?? []);
   const loading = planQ.isLoading || planQ.isPending;
+  const planMissing = !loading && plan === null;
 
   return {
     included,
@@ -114,13 +125,15 @@ export function useModuleAccess(agencyId?: string): ModuleAccess {
     has: (moduleKey?: string | null) => {
       if (!moduleKey) return true;
       if (loading) return true;
-      // Une offre introuvable (aucun abonnement) ne donne accès à rien.
-      if (!plan) return false;
+      // Une offre introuvable ne verrouille jamais la vue d'ensemble : cette
+      // page affiche l'état explicatif et l'action à faire (BLOC 1).
+      if (!plan) return NEVER_LOCKED_MODULES.has(moduleKey);
       return included.has(moduleKey);
     },
     loading,
     error: (planQ.error as Error | null) ?? null,
     plan,
+    planMissing,
     planName: plan?.display_name ?? plan?.name ?? '—',
   };
 }

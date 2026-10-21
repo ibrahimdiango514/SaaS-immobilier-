@@ -42,6 +42,8 @@ import { compressImages } from '@/lib/image-tools';
 // BLOC 3 : compteur de photos et decoupe des envois multiples selon l'offre.
 import { formatQuota, splitByPhotoQuota, usePhotoQuota } from '@/lib/plan-limits';
 import { PhotoQuotaBar } from '@/components/photo-quota';
+// BLOC 1 (session 3) : état de l'offre visible partout (essai, sans offre, retard).
+import { PlanStatusBanner } from '@/components/plan-status-banner';
 import { AgencyLogo, formatDate, parseDate } from '@/lib/workspace-ui';
 import { AgencyLogoCard } from '@/components/agency-logo-card';
 // BLOC 6 : archivage et suppression d'un bien (autorisations tranchees cote serveur).
@@ -225,6 +227,9 @@ function AppShell({ children }: { children: ReactNode }) {
         <BackButton space="agency" variant="mobile" testId="button-mobile-back" />
         <div className="mobile-brand"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={26} testId="display-mobile-agency-logo" /><strong>{activeAgency?.name ?? 'sofia immobilier'}</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">
+        {/* BLOC 1 (session 3) : l'état de l'offre est visible sur TOUTES les pages
+            de l'espace agence — essai en cours, offre absente, retard de paiement. */}
+        <PlanStatusBanner />
         {/* BLOC 3 : garde unique pour toutes les routes. Une URL saisie
             directement ne contourne pas le menu : l'ecran verrouille s'affiche. */}
         {(() => {

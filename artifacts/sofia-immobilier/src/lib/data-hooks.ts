@@ -1777,6 +1777,27 @@ export function useAdminUpdateAgency() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ agencyId, status, subscriptionStatus }: AgencyAdminActionInput) => {
+      // BLOC 1 (session 3) — CAUSE RACINE n°1 CORRIGÉE.
+      // Avant : un UPDATE direct de `agencies.status` quand on cliquait
+      // « Activer ». Résultat : l'agence passait 'active' SANS aucune ligne
+      // `agency_subscriptions`, donc `agency_current_plan()` ne renvoyait rien
+      // et la vue d'ensemble se verrouillait (« offre non reconnue »).
+      // Désormais l'activation passe par la SEULE fonction qui écrit l'offre :
+      // `public.admin_activate_agency`, qui crée l'abonnement au besoin.
+      if (status === 'active') {
+        const { error: activateError } = await rpcClient().rpc('admin_activate_agency', {
+          p_agency_id: agencyId,
+        });
+        if (activateError) throw activateError;
+        const { data: refreshed, error: readError } = await db()
+          .from('agencies')
+          .select(AGENCY_COLUMNS)
+          .eq('id', agencyId)
+          .single();
+        if (readError) throw readError;
+        return refreshed;
+      }
+
       const { data, error } = await db()
         .from('agencies')
         .update({ status })
@@ -1794,10 +1815,20 @@ export function useAdminUpdateAgency() {
       return data;
     },
     onSuccess: async () => {
+      // BLOC 1 (session 3) — CAUSE RACINE n°3 CORRIGÉE.
+      // Les KPI et graphiques ne bougeaient pas après un changement d'offre,
+      // une validation de paiement ou une suspension : les clés de cache des
+      // graphiques (`plan`, `platform`, `subscriptions`, `billing`) n'étaient
+      // pas invalidées. On invalide désormais TOUT ce qui dépend de l'offre.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: getAllAgenciesQueryKey() }),
         queryClient.invalidateQueries({ queryKey: getPlatformSummaryQueryKey() }),
         queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getSubscriptionsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getSubscriptionPaymentsQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getPlansQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['plan'] }),
+        queryClient.invalidateQueries({ queryKey: ['billing'] }),
         queryClient.invalidateQueries({ queryKey: ['sofia', 'agencies'] }),
       ]);
     },
