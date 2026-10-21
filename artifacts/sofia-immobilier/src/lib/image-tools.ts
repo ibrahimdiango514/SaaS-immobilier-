@@ -1,11 +1,24 @@
 /**
  * Compression et redimensionnement d'images avant envoi vers Supabase Storage.
  * Formats acceptés : JPG, PNG, WebP. Sortie : WebP si transparence, sinon JPG.
+ *
+ * LOT B (point A) — cible de poids : 5 Mo.
+ * La compression procède par étapes : dimensions plafonnées à 1600 px, puis
+ * qualité JPEG/WebP réduite palier par palier jusqu'à passer sous la cible.
+ * Le fichier n'est refusé que si aucun palier n'y parvient.
+ *
+ * Ne concerne que les NOUVEAUX uploads : les photos déjà en base et leurs
+ * public_url ne sont jamais retouchées.
  */
 
 const ACCEPTED_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 const MAX_DIMENSION = 1600;
-const JPEG_QUALITY = 0.85;
+
+/** Cible imposée pour que le lien reste exploitable sur WhatsApp. */
+const MAX_TARGET_SIZE = 5 * 1024 * 1024;
+
+/** Paliers de qualité essayés dans l'ordre, du plus fidèle au plus agressif. */
+const QUALITY_STEPS = [0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25];
 
 export function isSupportedImageType(type: string): boolean {
   return ACCEPTED_TYPES.has(type);
@@ -38,47 +51,67 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number):
 }
 
 /**
- * Compresse et redimensionne une image (max 1600 px) en préservant le ratio.
- * Retourne un fichier optimisé, ou l'original s'il est déjà léger et valide.
+ * Compresse et redimensionne une image (max 1600 px) en préservant le ratio,
+ * puis réduit la qualité par paliers jusqu'à passer sous 5 Mo.
+ * Retourne un fichier optimisé, ou l'original s'il est déjà sous la cible.
  */
 export async function compressImage(file: File): Promise<File> {
   if (!isSupportedImageType(file.type)) {
     throw new Error('Formats acceptés : JPG, PNG ou WebP uniquement.');
   }
 
+  // Déjà sous la cible : aucun retraitement, on évite une perte de qualité inutile.
+  if (file.size <= MAX_TARGET_SIZE) return file;
+
   try {
     const image = await loadImage(file);
     const ratio = Math.min(1, MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
-    const shouldResize = ratio < 1;
-    const alreadyOptimal = !shouldResize && file.size <= 500 * 1024;
-
-    if (alreadyOptimal) return file;
-
     const width = Math.max(1, Math.round(image.naturalWidth * ratio));
     const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context) return file;
+    // Sans contexte 2D on ne peut pas recompresser : l'original dépasse la cible.
+    if (!context) {
+      throw new Error(
+        `L’image « ${file.name} » dépasse 5 Mo et n’a pas pu être compressée (${formatBytes(file.size)}).`,
+      );
+    }
     context.drawImage(image, 0, 0, width, height);
 
     const hasTransparency = file.type === 'image/png' || file.type === 'image/webp';
     const outputType = hasTransparency ? 'image/webp' : 'image/jpeg';
-    const blob = await canvasToBlob(canvas, outputType, JPEG_QUALITY);
-    if (!blob || blob.size >= file.size) {
-      // L'original est déjà plus léger : on le garde tel quel.
-      if (file.size <= 10 * 1024 * 1024) return file;
-      throw new Error(`L’image « ${file.name} » est trop lourde (10 Mo maximum).`);
-    }
-
     const extension = outputType === 'image/webp' ? 'webp' : 'jpg';
     const baseName = file.name.replace(/\.[^.]+$/, '');
-    return new File([blob], `${baseName}.${extension}`, { type: outputType, lastModified: Date.now() });
+
+    // Descente par paliers : on s'arrête au premier résultat sous la cible.
+    let best: Blob | null = null;
+    for (const quality of QUALITY_STEPS) {
+      const blob = await canvasToBlob(canvas, outputType, quality);
+      if (!blob) continue;
+      if (!best || blob.size < best.size) best = blob;
+      if (blob.size <= MAX_TARGET_SIZE) {
+        return new File([blob], `${baseName}.${extension}`, {
+          type: outputType,
+          lastModified: Date.now(),
+        });
+      }
+    }
+
+    // Aucun palier n'a suffi : refus explicite plutôt qu'un envoi hors limite.
+    throw new Error(
+      `L’image « ${file.name} » reste trop lourde après compression ` +
+        `(${formatBytes(best?.size ?? file.size)}). Utilisez un fichier plus léger.`,
+    );
   } catch (error) {
-    if (error instanceof Error && error.message.includes('10 Mo')) throw error;
-    // Image illisible : on tente l'envoi tel quel (validation Storage fera foi).
-    return file;
+    // On laisse passer nos propres refus, ainsi que les images illisibles dont
+    // la taille est déjà connue comme supérieure à la cible.
+    if (error instanceof Error && error.message.includes(file.name)) throw error;
+    throw new Error(
+      `L’image « ${file.name} » dépasse 5 Mo et n’a pas pu être compressée.`,
+    );
   }
 }
 
