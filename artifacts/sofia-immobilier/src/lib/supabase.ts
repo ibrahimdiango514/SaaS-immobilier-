@@ -38,7 +38,13 @@ export function getSupabaseErrorMessage(error: unknown, action = 'cette opérati
   if (message.includes('email not confirmed')) {
     return 'Cette adresse e-mail n’a pas encore été confirmée.';
   }
-  if (candidate?.code === '42501' || message.includes('permission denied')) {
+  if (message.includes('violates check constraint')) {
+    return `Impossible d’effectuer ${action} : une valeur refusée par la base de données (contrainte de validité). Vérifiez les champs saisis puis réessayez.`;
+  }
+  if (message.includes('failed to fetch') || message.includes('networkerror') || message.includes('fetch failed')) {
+    return `Connexion réseau interrompue pendant ${action}. Vérifiez votre connexion Internet et réessayez.`;
+  }
+  if (candidate?.code === '42501' || message.includes('permission denied') || message.includes('row-level security')) {
     return 'Supabase a refusé l’accès aux données. Vérifiez votre rôle et les autorisations RLS de votre agence.';
   }
   if (candidate?.code === 'PGRST106' || message.includes('schema') && message.includes('not exposed')) {

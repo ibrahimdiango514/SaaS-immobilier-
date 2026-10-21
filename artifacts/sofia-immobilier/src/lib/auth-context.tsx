@@ -17,7 +17,8 @@ interface AuthContextValue {
   loading: boolean;
   configurationError: string | null;
   initializationError: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<User | null>;
+  signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -83,9 +84,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
+    const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
     if (error) throw error;
+    return data.user ?? null;
   }, []);
+
+  const signUp = useCallback(async (email: string, password: string) => {
+    const { data, error } = await getSupabaseClient().auth.signUp({ email, password });
+    if (error) throw error;
+    // Si la confirmation d'e-mail est désactivée (mailer_autoconfirm), la session
+    // est immédiatement active. Sinon, aucun user n'est renvoyé : l'écran d'inscription
+    // affichera alors l'étape « vérifiez votre boîte mail ».
+    if (data.session) {
+      queryClient.clear();
+      setSession(data.session);
+    }
+  }, [queryClient]);
 
   const signOut = useCallback(async () => {
     const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
@@ -103,6 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : 'La configuration Supabase manque. Les données de l’agence ne peuvent pas être chargées.',
     initializationError,
     signIn,
+    signUp,
     signOut,
   };
 

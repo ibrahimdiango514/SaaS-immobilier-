@@ -1,0 +1,139 @@
+// LOT A (point 4) — CRÉATION DIRECTE d'un membre d'agence, SANS SMTP.
+// Remplace la version déployée qui exigeait inviteUserByEmail (donc un SMTP).
+//
+// Différences clés avec la baseline :
+//   - admin.createUser + mot de passe temporaire (au lieu de inviteUserByEmail)
+//   - mot de passe renvoyé UNE SEULE FOIS dans la réponse
+//   - user_metadata.must_change_password = true (changement forcé à la 1re connexion)
+//   - contrôle explicite : agence non suspendue + places disponibles
+//     (invitations en attente comprises, via agency_seat_availability)
+//   - agency_id jamais cru sur parole : vérifié côté serveur par has_agency_role
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { corsHeaders, json } from '../_shared/http.ts'
+
+const allowedRoles = new Set(['admin', 'agent'])
+const MIN_PASSWORD_LENGTH = 8
+
+function generateTempPassword(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  const bytes = new Uint8Array(12)
+  crypto.getRandomValues(bytes)
+  let out = ''
+  for (const b of bytes) out += alphabet[b % alphabet.length]
+  return out
+}
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
+
+  const authorization = request.headers.get('Authorization')
+  if (!authorization?.startsWith('Bearer ')) return json({ error: 'authentication_required' }, 401)
+
+  const url = Deno.env.get('SUPABASE_URL')
+  const anon = Deno.env.get('SUPABASE_ANON_KEY')
+  const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!url || !anon || !service) return json({ error: 'server_configuration_error' }, 500)
+
+  let body: any
+  try { body = await request.json() } catch { return json({ error: 'invalid_json' }, 400) }
+
+  const agencyId = String(body.agency_id ?? '').trim()
+  const fullName = String(body.full_name ?? '').trim()
+  const email = String(body.email ?? '').trim().toLowerCase()
+  const role = String(body.role ?? '').trim().toLowerCase()
+  const phone = String(body.phone ?? '').trim() || undefined
+  // Mot de passe temporaire optionnel : fourni par le propriétaire, sinon généré.
+  const tempPassword = typeof body.temp_password === 'string' ? body.temp_password : generateTempPassword()
+
+  if (!agencyId || !fullName || !email || !role) {
+    return json({ error: 'agency_context_full_name_email_and_role_are_required' }, 400)
+  }
+  if (!allowedRoles.has(role)) return json({ error: 'role_not_allowed' }, 400)
+  if (tempPassword.length < MIN_PASSWORD_LENGTH) {
+    return json({ error: 'password_too_short', min_length: MIN_PASSWORD_LENGTH }, 400)
+  }
+
+  const callerClient = createClient(url, anon, {
+    auth: { persistSession: false },
+    global: { headers: { Authorization: authorization } },
+  })
+  const admin = createClient(url, service, { auth: { persistSession: false } })
+
+  // 1. Appelant authentifié
+  const { data: callerData, error: callerError } = await callerClient.auth.getUser()
+  const caller = callerData.user
+  if (callerError || !caller) return json({ error: 'authentication_required' }, 401)
+
+  // 2. Propriétaire ou administrateur de CETTE agence (le JWT fait foi, pas le body)
+  const { data: allowed, error: allowedError } = await callerClient.rpc('has_agency_role', {
+    target_agency_id: agencyId,
+    required_role: 'admin',
+  })
+  if (allowedError || allowed !== true) return json({ error: 'agency_admin_or_owner_required' }, 403)
+
+  // 3. Agence non suspendue
+  const { data: active, error: activeError } = await callerClient.rpc('agence_active', { agency_id: agencyId })
+  if (activeError || active !== true) return json({ error: 'agency_suspended' }, 403)
+
+  // 4. Limite d'utilisateurs non atteinte (membres actifs + invitations en attente)
+  const { data: seats, error: seatsError } = await callerClient.rpc('agency_seat_availability', {
+    p_agency_id: agencyId,
+  })
+  if (seatsError) return json({ error: 'seat_check_failed', details: seatsError.message }, 500)
+  const seatsInfo = seats as { available: number; seats_used: number; seats_limit: number; is_unlimited: boolean }
+  if (!seatsInfo.is_unlimited && seatsInfo.available <= 0) {
+    return json({
+      error: 'member_limit_reached',
+      seats_used: seatsInfo.seats_used,
+      seats_limit: seatsInfo.seats_limit,
+    }, 409)
+  }
+
+  // 5. Création du compte auth avec mot de passe temporaire
+  const { data: created, error: createError } = await admin.auth.admin.createUser({
+    email,
+    password: tempPassword,
+    email_confirm: true,          // pas de SMTP : le compte est utilisable tout de suite
+    user_metadata: {
+      full_name: fullName,
+      phone,
+      must_change_password: true,  // changement forcé à la première connexion
+    },
+  })
+  if (createError || !created.user?.id) {
+    const message = createError?.message?.toLowerCase() ?? ''
+    const taken = message.includes('already') || message.includes('registered') || message.includes('exists')
+    return json({ error: taken ? 'email_already_exists' : 'auth_user_creation_failed' }, taken ? 409 : 502)
+  }
+
+  // 6. Rattachement à l'agence — UNIQUEMENT cette agence
+  const { data: membership, error: membershipError } = await admin.rpc('create_agency_member', {
+    p_actor_user_id: caller.id,
+    p_agency_id: agencyId,
+    p_invited_user_id: created.user.id,
+    p_role: role,
+  })
+  if (membershipError) {
+    // Compensation : on ne laisse pas un compte orphelin.
+    const { error: compensationError } = await admin.auth.admin.deleteUser(created.user.id)
+    console.error('agency_member_provisioning_failed', {
+      message: membershipError.message,
+      compensation_failed: Boolean(compensationError),
+    })
+    const limit = membershipError.message?.includes('Limite') || membershipError.message?.includes('limite')
+    return json({
+      error: limit ? 'member_limit_reached' : 'agency_member_provisioning_failed',
+      details: membershipError.message,
+    }, limit ? 409 : 500)
+  }
+
+  // Le mot de passe temporaire n'est renvoyé qu'ici, une seule fois.
+  return json({
+    membership: Array.isArray(membership) ? membership[0] : membership,
+    invited_email: email,
+    temp_password: tempPassword,
+    must_change_password: true,
+    seats: seatsInfo,
+  }, 201)
+})
