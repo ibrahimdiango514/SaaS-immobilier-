@@ -2840,3 +2840,28 @@ input, .form-select, textarea {
 .module-row.is-locked { color: var(--si-text-muted); background: var(--si-bg); }
 .upgrade-block { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--si-border-soft); display: grid; gap: 10px; }
 .upgrade-options { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* =============================================================================
+   BLOC 9 — BOUTON RETOUR MOBILE
+   Zone tactile >= 44 px, safe-area respectee, visible dans les previews.
+   ============================================================================= */
+.mobile-back {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid var(--si-border);
+  background: var(--si-panel);
+  color: var(--si-text);
+}
+.mobile-back:active { background: var(--si-bg); }
+.mobile-header {
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
+  padding-top: max(8px, env(safe-area-inset-top));
+  gap: 8px;
+}
+/* Le bouton retour doit rester visible meme quand le fil d'ariane est long. */
+.mobile-header .mobile-brand { min-width: 0; overflow: hidden; }

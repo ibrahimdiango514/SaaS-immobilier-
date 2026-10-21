@@ -157,7 +157,11 @@ function AppShell({ children }: { children: ReactNode }) {
           </div>}
         </div>
       </div></header>
-      <header className="mobile-header"><div className="mobile-brand"><BrandMark /><strong>sofia immobilier</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
+      <header className="mobile-header">
+        {/* BLOC 9 : bouton retour visible aussi sur mobile et dans les previews.
+            Repli sur /dashboard quand il n'y a pas d'historique de navigation. */}
+        {path !== '/dashboard' && <button type="button" className="icon-button mobile-back" onClick={() => { if (window.history.length > 1) window.history.back(); else window.location.assign('/dashboard'); }} aria-label="Retour" title="Retour" data-testid="button-mobile-back"><ChevronLeft size={20} /></button>}
+        <div className="mobile-brand"><BrandMark /><strong>sofia immobilier</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">{children}</main>
     </div>
     {notice && <div className="notice-toast" role={signOutError ? 'alert' : 'status'} data-testid="status-notifications">{signOutError || 'Action effectuée.'}<button onClick={() => setNotice('')} aria-label="Fermer le message" data-testid="button-dismiss-notice"><X size={13} /></button></div>}
