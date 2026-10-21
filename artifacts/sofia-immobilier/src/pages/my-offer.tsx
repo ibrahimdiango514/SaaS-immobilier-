@@ -4,11 +4,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Building2, Check, CreditCard, ImageIcon, Lock, Sparkles, UsersRound,
+  AlertTriangle, Building2, Check, ImageIcon, Lock, Sparkles, UsersRound,
 } from 'lucide-react';
 import {
-  ButtonPrimary, ErrorState, Heading, LoadingRows, useSafeRetry, cash,
+  ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel,
 } from '@/lib/workspace-ui';
+import { PaymentSection } from '@/components/payment-panel';
 import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 
@@ -32,7 +33,16 @@ interface UsagePlan {
 interface UsageSnapshot {
   plan: UsagePlan;
   seats: { seats_used: number; seats_limit: number; is_unlimited: boolean; invitations_pending: number };
-  billing: { grace_days: number; is_overdue: boolean; is_due_soon: boolean; has_due_date: boolean };
+  billing: {
+    grace_days: number;
+    is_overdue: boolean;
+    is_due_soon: boolean;
+    has_due_date: boolean;
+    is_past_grace?: boolean;
+    days_to_due?: number;
+    ends_at?: string | null;
+    sub_status?: string;
+  };
   properties_used: number;
   properties_limit: number;
   photos_per_property_max: number;
@@ -207,14 +217,11 @@ export default function MyOfferPage() {
           </div>
           <div className="offer-facts">
             <div><span>Frais d’installation</span><strong>{cash(Number(plan.setup_fee), plan.currency)}</strong></div>
-            <div><span>Échéance</span><strong>{billing.has_due_date ? 'À venir' : 'Aucune échéance'}</strong></div>
+            <div><span>Échéance</span><strong>{billing.has_due_date ? (billing.ends_at ? dateLabel(billing.ends_at as string) : 'À venir') : 'Aucune échéance'}</strong></div>
             <div><span>Délai de grâce</span><strong>{billing.grace_days} jour(s)</strong></div>
           </div>
-          {canManageAgency && (
-            <ButtonPrimary testId="button-pay-subscription" onClick={() => setNotice('Le paiement manuel arrive au point B4. Utilisez la déclaration de paiement dès qu’elle sera disponible.')}>
-              <CreditCard size={14} /> Payer mon abonnement
-            </ButtonPrimary>
-          )}
+          {/* BLOC 1 : le bouton « Payer mon abonnement » vit désormais dans la
+              section de paiement ci-dessous (déclaration + suivi d'état). */}
         </section>
 
         <section className="panel" data-testid="panel-usage">
@@ -272,6 +279,10 @@ export default function MyOfferPage() {
           )}
         </section>
       </div>
+
+      {/* BLOC 1 : déclaration de paiement manuel (Orange Money / Wave) et
+          suivi de l'état des déclarations de l'agence. */}
+      <PaymentSection agencyId={activeAgencyId} />
 
       {notice && <p className="form-feedback" role="status" data-testid="status-offer-message">{notice}</p>}
     </>

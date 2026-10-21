@@ -131,3 +131,41 @@ Autres écritures en base :
   utiliser `curl https://api.github.com/repos/ibrahimdiango514/SaaS-immobilier-/branches`.
 - Le bac à sable **ne peut pas** appeler `*.supabase.co` (`SSL_ERROR_SYSCALL`) :
   les Edge Functions déployées ne sont testables que depuis un navigateur.
+
+---
+
+# SESSION 2026-10-21 (suite) — branche `arena/ffbfe14e-saas-immobilier`
+
+> La branche de session Arena a changé. Le travail précédent
+> (`arena/eaaefdc5-saas-immobilier`, commit `cd3aa50`) a été **fusionné** dans
+> `arena/ffbfe14e-saas-immobilier`. Aucune branche existante n'a été réécrite.
+
+## BLOC 1 — PAIEMENT MANUEL (agence) : FAIT
+
+- Migration `db/migrations/2026-10-21_bloc1-2_paiements_admin.sql` **appliquée en base**
+  (rollback : `db/rollback/2026-10-21_bloc1-2_paiements_admin_rollback.sql`).
+  Additive : 3 fonctions SECURITY DEFINER dans `public`, aucune table/colonne/RLS touchée.
+  - `public.agency_payment_access(uuid)` → instructions `platform_settings`,
+    échéance (`agency_billing_state`), plan, montant attendu, déclarations de l'agence.
+    Garde : `is_agency_member`. Droits : `authenticated` + `service_role` (revoke PUBLIC/anon).
+  - `public.admin_update_platform_setting(text, jsonb)` → garde `is_platform_owner`
+    (identique à la RLS existante `platform_settings_admin_write`, aucun droit élargi).
+    Clés autorisées : `payment_instructions`, `billing`.
+  - `public.platform_subscription_revenue(integer)` → garde `is_platform_admin`.
+    Revenus par mois sur `subscription_payments` (donc paiements **validés** uniquement),
+    répartition par plan réel, totaux (payantes, essai, suspendues, échéances, files d'attente).
+- `src/lib/payments-api.ts` : hooks `useAgencyPaymentAccess`, `useSubmitPaymentDeclaration`,
+  `usePaymentProofUrl`. Capture dans le bucket **privé** `payment-proofs` au chemin
+  `<agency_id>/<uuid>-<nom>` — imposé par la politique existante
+  `payment_proofs_owner_select` qui lit `public.storage_agency_id(name)`.
+  Compensation : si la déclaration échoue après l'envoi, le fichier est supprimé.
+- `src/components/payment-panel.tsx` : instructions (Orange Money / Wave + bénéficiaire),
+  formulaire (montant, date, moyen, référence obligatoire, capture 5 Mo jpg/png/webp/pdf),
+  historique avec état **en attente / validée / rejetée + motif**.
+  Bouton « Payer mon abonnement » réservé à `can_manage` (owner/admin), lecture seule sinon.
+- `src/pages/my-offer.tsx` : bouton inerte remplacé par `<PaymentSection/>`, échéance datée.
+- CSS : jetons **manquants** définis (`--si-text-muted`, `--si-panel`, `--si-panel-subtle`,
+  `--si-success-text`, `--si-info-text`) — 15 usages existants retombaient sur une valeur
+  héritée, donc contraste imprévisible en clair comme en sombre.
+- `pnpm run typecheck` OK · `pnpm run build` OK.
+- Non testé sans navigateur : l'envoi réel de la capture et l'appel RPC.

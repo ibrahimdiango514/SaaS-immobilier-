@@ -2865,3 +2865,128 @@ input, .form-select, textarea {
 }
 /* Le bouton retour doit rester visible meme quand le fil d'ariane est long. */
 .mobile-header .mobile-brand { min-width: 0; overflow: hidden; }
+
+/* =============================================================================
+   CORRECTIF TOKENS — jetons --si-* employés mais jamais définis.
+   `--si-text-muted` (11 usages), `--si-panel` (3) et `--si-panel-subtle` (1)
+   étaient appelés sans valeur : la propriété retombait sur la valeur héritée,
+   donc un contraste imprévisible en clair comme en sombre (pages Équipe et
+   Mon offre). Valeurs explicites pour les deux thèmes.
+   ============================================================================= */
+:root {
+  --si-panel: #ffffff;
+  --si-panel-subtle: #f7faf6;
+  --si-text-muted: #64786e;
+  --si-success-text: #15803d;
+  --si-info-text: #1d64c4;
+}
+[data-theme='dark'] {
+  --si-panel: #111b17;
+  --si-panel-subtle: #152220;
+  --si-text-muted: #a3b2aa;
+  --si-success-text: #7fd6a2;
+  --si-info-text: #93b6e8;
+}
+
+/* =============================================================================
+   BLOC 1 — PAIEMENT MANUEL (déclaration Orange Money / Wave)
+   ============================================================================= */
+.payment-panel { margin-top: 16px; }
+.payment-panel .panel-head { flex-wrap: wrap; gap: 12px; }
+
+.payment-instructions {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--si-border-soft);
+  background: var(--si-panel-subtle);
+  display: grid;
+  gap: 12px;
+}
+.payment-instructions-head { display: flex; align-items: center; gap: 10px; color: var(--si-brand-text); }
+.payment-instructions-head strong { display: block; font-size: 13.5px; color: var(--si-text); }
+.payment-instructions-head span { display: block; font-size: 12px; color: var(--si-text-muted); }
+.payment-channels { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.payment-channel {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--si-border-brand);
+  background: var(--si-panel);
+  display: grid;
+  gap: 3px;
+}
+.payment-channel.is-empty { border-color: var(--si-border-soft); opacity: .75; }
+.payment-channel strong { font-size: 17px; letter-spacing: .02em; color: var(--si-text); font-variant-numeric: tabular-nums; }
+.payment-channel small { font-size: 12px; color: var(--si-text-muted); }
+.payment-note { margin: 0; font-size: 12.5px; color: var(--si-text-muted); }
+
+.payment-expected {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--si-border-brand);
+  background: var(--si-tint-soft, var(--si-panel-subtle));
+  font-size: 13px;
+  color: var(--si-text);
+}
+.payment-expected svg { flex: none; margin-top: 2px; color: var(--si-brand-text); }
+
+.method-choice { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.method-option {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--si-border-soft);
+  background: var(--si-panel);
+  color: var(--si-text);
+  cursor: pointer;
+  min-height: 44px;
+}
+.method-option small { font-size: 11.5px; color: var(--si-text-muted); }
+.method-option.is-selected { border-color: var(--si-border-brand); box-shadow: inset 0 0 0 1px var(--si-border-brand); }
+.method-option.is-selected strong { color: var(--si-brand-text); }
+
+.proof-upload { width: 100%; justify-content: flex-start; text-wrap: auto; }
+.proof-upload.has-file { background: var(--si-brand-deep); }
+
+.form-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--si-text); margin-bottom: 5px; }
+.form-hint { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 11.5px; color: var(--si-text-muted); }
+
+.declaration-list { margin-top: 14px; display: grid; gap: 8px; }
+.declaration-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 13px;
+  border-radius: 11px;
+  border: 1px solid var(--si-border-soft);
+  background: var(--si-panel);
+}
+.declaration-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--si-panel-subtle); color: var(--si-text-muted); }
+.declaration-row.is-approved .declaration-icon { color: var(--si-success-text); }
+.declaration-row.is-rejected .declaration-icon { color: var(--si-danger-text); }
+.declaration-row.is-pending .declaration-icon { color: var(--si-gold-text, var(--si-text-muted)); }
+.declaration-main { display: grid; gap: 2px; min-width: 0; }
+.declaration-main strong { font-size: 14.5px; color: var(--si-text); }
+.declaration-main small { font-size: 12px; color: var(--si-text-muted); word-break: break-word; }
+.declaration-meta { font-size: 11px; opacity: .8; }
+.declaration-state { display: grid; gap: 6px; justify-items: end; text-align: right; }
+.declaration-status.is-approved { background: var(--si-success); color: #fff; }
+.declaration-status.is-rejected { background: var(--si-danger); color: #fff; }
+.declaration-status.is-pending { background: var(--si-gold); color: #231a06; }
+.declaration-reason { margin: 0; max-width: 34ch; font-size: 11.5px; color: var(--si-danger-text); }
+.declaration-reason.is-ok { color: var(--si-text-muted); }
+
+.notice-box.is-error { border-color: var(--si-danger); color: var(--si-danger-text); }
+
+@media (max-width: 640px) {
+  .declaration-row { grid-template-columns: auto minmax(0, 1fr); }
+  .declaration-state { grid-column: 1 / -1; justify-items: start; text-align: left; }
+  .payment-panel .panel-head .primary-action { width: 100%; justify-content: center; }
+}
