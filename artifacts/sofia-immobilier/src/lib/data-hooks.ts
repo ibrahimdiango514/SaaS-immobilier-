@@ -523,6 +523,13 @@ export function useDashboardSummary(agencyId?: string) {
   });
 }
 
+const PROPERTY_COLUMNS =
+  'id, agency_id, reference, title, description, transaction_type, property_type, status, price, currency, neighborhood, city, address, bedrooms, bathrooms, area_m2, latitude, longitude, commission_rate, rental_commission_rate, metadata, created_at, updated_at, is_archived, archived_at';
+
+/**
+ * Biens de l'agence, SANS les biens archivés (BLOC 6).
+ * C'est la liste utilisée partout : vue d'ensemble, pipeline, contacts.
+ */
 export function useProperties(agencyId?: string) {
   return useQuery({
     queryKey: getPropertiesQueryKey(agencyId),
@@ -531,11 +538,153 @@ export function useProperties(agencyId?: string) {
       if (!agencyId) return [];
       const { data, error } = await db()
         .from('properties')
-        .select('id, agency_id, reference, title, description, transaction_type, property_type, status, price, currency, neighborhood, city, address, bedrooms, bathrooms, area_m2, latitude, longitude, commission_rate, rental_commission_rate, metadata, created_at, updated_at')
+        .select(PROPERTY_COLUMNS)
         .eq('agency_id', agencyId)
+        .eq('is_archived', false)
         .order('created_at', { ascending: false });
       if (error) throw error;
       return data;
+    },
+  });
+}
+
+/**
+ * BLOC 6 : biens archivés + fiche d'un bien éventuellement archivé.
+ * `useProperties` les exclut ; cette requête distincte alimente le filtre
+ * « Biens archivés » de la page Biens et la fiche détaillée.
+ */
+export function useArchivedProperties(agencyId?: string, enabled = true) {
+  return useQuery({
+    queryKey: [...getPropertiesQueryKey(agencyId), 'archived'],
+    enabled: Boolean(agencyId) && enabled,
+    queryFn: async (): Promise<PropertyRow[]> => {
+      if (!agencyId) return [];
+      const { data, error } = await db()
+        .from('properties')
+        .select(PROPERTY_COLUMNS)
+        .eq('agency_id', agencyId)
+        .eq('is_archived', true)
+        .order('archived_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* BLOC 6 — Archivage et suppression d'un bien                         */
+/* ------------------------------------------------------------------ */
+
+/** Résultat de `public.property_delete_impact` : alimente l'avertissement. */
+export type PropertyDeleteImpact = {
+  property_id: string;
+  title: string;
+  reference: string;
+  status: string;
+  is_archived: boolean;
+  can_delete: boolean;
+  can_archive: boolean;
+  archive_suggested: boolean;
+  media_count: number;
+  revenue_operations: number;
+  revenue_amount: number;
+  opportunities: number;
+  visits: number;
+  appointments: number;
+};
+
+export type PropertyMediaRef = { id: string; storage_path: string | null; file_name: string | null };
+
+export type PropertyDeletionResult = {
+  deleted: boolean;
+  property_id: string;
+  agency_id: string;
+  title: string;
+  media: PropertyMediaRef[];
+  impact: { revenue_operations: number; opportunities: number; visits: number; appointments: number };
+  /** Fichiers que le purge Storage n'a pas pu retirer (à signaler, non bloquant). */
+  storage_errors: string[];
+};
+
+type RpcClient = { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }> };
+const rpcClient = () => getSupabaseClient() as unknown as RpcClient;
+
+/** Lecture seule : ce que la suppression d'un bien entraînerait. */
+export function usePropertyDeleteImpact(propertyId?: string) {
+  return useQuery({
+    queryKey: ['sofia', 'property-delete-impact', propertyId],
+    enabled: Boolean(propertyId),
+    queryFn: async (): Promise<PropertyDeleteImpact> => {
+      const { data, error } = await rpcClient().rpc('property_delete_impact', { p_property_id: propertyId });
+      if (error) throw error;
+      return data as PropertyDeleteImpact;
+    },
+  });
+}
+
+/** Archive / restaure un bien sans toucher à son statut : le CA est conservé. */
+export function useArchiveProperty(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { propertyId: string; archived: boolean }) => {
+      const { data, error } = await rpcClient().rpc('archive_property', {
+        p_property_id: input.propertyId,
+        p_archived: input.archived,
+      });
+      if (error) throw error;
+      return data as { property_id: string; title: string; status: string; is_archived: boolean };
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getPropertiesQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'properties'] }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
+    },
+  });
+}
+
+/**
+ * Supprime un bien (owner/admin uniquement — tranché côté serveur), purge les
+ * fichiers du bucket `property-images` et laisse le CA détaché du bien
+ * (`revenue_operations.property_id` est ON DELETE SET NULL).
+ */
+export function useDeletePropertyWithMedia(agencyId?: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (propertyId: string): Promise<PropertyDeletionResult> => {
+      const { data, error } = await rpcClient().rpc('delete_property_with_media', {
+        p_property_id: propertyId,
+      });
+      if (error) throw error;
+      const result = data as Omit<PropertyDeletionResult, 'storage_errors'>;
+
+      // Purge Storage APRÈS la suppression en base : les lignes property_media
+      // ont disparu (CASCADE), les chemins ont été renvoyés par la fonction.
+      const paths = (result.media ?? [])
+        .map((entry) => entry.storage_path)
+        .filter((path): path is string => Boolean(path));
+      const storageErrors: string[] = [];
+      if (paths.length) {
+        const { error: storageError } = await getSupabaseClient()
+          .storage
+          .from('property-images')
+          .remove(paths);
+        if (storageError) {
+          // Non bloquant : la fiche est supprimée, on signale les fichiers restants.
+          storageErrors.push(getSupabaseErrorMessage(storageError, 'purger les fichiers'));
+        }
+      }
+      return { ...result, storage_errors: storageErrors };
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getPropertiesQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'properties'] }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+      ]);
     },
   });
 }
@@ -582,7 +731,7 @@ export function useCreateProperty(agencyId?: string) {
       const { data, error } = await db()
         .from('properties')
         .insert({ ...input, agency_id: agencyId })
-        .select('id, agency_id, reference, title, description, transaction_type, property_type, status, price, currency, neighborhood, city, address, bedrooms, bathrooms, area_m2, latitude, longitude, commission_rate, rental_commission_rate, metadata, created_at, updated_at')
+        .select(PROPERTY_COLUMNS)
         .single();
       if (error) throw error;
       return data;
@@ -606,7 +755,7 @@ export function useUpdateProperty(agencyId?: string) {
         .update(input)
         .eq('id', id)
         .eq('agency_id', agencyId)
-        .select('id, agency_id, reference, title, description, transaction_type, property_type, status, price, currency, neighborhood, city, address, bedrooms, bathrooms, area_m2, latitude, longitude, commission_rate, rental_commission_rate, metadata, created_at, updated_at')
+        .select(PROPERTY_COLUMNS)
         .single();
       if (error) throw error;
       return data;
@@ -1399,7 +1548,7 @@ export function useAllProperties() {
     queryFn: async (): Promise<PropertyRow[]> => {
       const { data, error } = await db()
         .from('properties')
-        .select('id, agency_id, reference, title, description, transaction_type, property_type, status, price, currency, neighborhood, city, address, bedrooms, bathrooms, area_m2, latitude, longitude, commission_rate, rental_commission_rate, metadata, created_at, updated_at')
+        .select(PROPERTY_COLUMNS)
         .order('created_at', { ascending: false });
       if (error) throw error;
       return data;

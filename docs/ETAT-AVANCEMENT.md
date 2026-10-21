@@ -276,3 +276,59 @@ Autres écritures en base :
 - `pnpm run typecheck` OK · `pnpm run build` OK. Aucune migration nécessaire.
 - ⚠️ Non testable depuis le sandbox (pas d'accès réseau à `*.supabase.co`) :
   le test réel se fait depuis le navigateur — voir la liste de tests manuels.
+
+## BLOC 6 — SUPPRESSION ET ARCHIVAGE D'UN BIEN : FAIT, MIGRATION APPLIQUÉE
+
+**Migration appliquée en base** (`create_migration`, nom `bloc6_archive_suppression`) :
+`db/migrations/2026-10-21_bloc6_archive_suppression.sql`
++ rollback `db/rollback/2026-10-21_bloc6_archive_suppression_rollback.sql`.
+
+- `saas_immobilier.properties.is_archived boolean NOT NULL DEFAULT false`
+  et `archived_at timestamptz` (additifs) + 2 index partiels.
+- **Découverte décisive** : le trigger existant `trg_sync_property_revenue`
+  (`AFTER UPDATE OF status, price, …`) **annule** l'opération de CA automatique dès
+  que le statut quitte `sold`/`rented`. Passer un bien vendu à `status='archived'`
+  aurait donc **effacé son CA**. → L'archivage utilise la colonne dédiée
+  `is_archived` et ne touche jamais au `status` : le CA, l'historique et les
+  statistiques restent intacts, **sans modifier aucun trigger existant**.
+- **Seule modification d'une fonction existante** (validée par l'utilisateur,
+  « vas-y continue » après présentation de l'option recommandée) :
+  `public.enforce_property_limit()` recréée avec `AND is_archived = false` dans le
+  COUNT. Plafond, offre, message et HINT `plan_limit_properties` inchangés.
+  Le rollback restaure la définition d'origine à l'identique.
+- 3 nouvelles fonctions `SECURITY DEFINER`, `GRANT EXECUTE` à `authenticated,
+  service_role` uniquement (révoqué `PUBLIC, anon`) :
+  - `public.property_delete_impact(uuid) → jsonb` (STABLE, garde `is_agency_member`) :
+    photos, opérations de CA + montant, opportunités, visites, RDV, `can_delete`,
+    `can_archive`, `archive_suggested`.
+  - `public.archive_property(uuid, boolean) → jsonb` (garde `has_agency_role(...,'admin')`).
+  - `public.delete_property_with_media(uuid) → jsonb` (garde `admin`) : renvoie les
+    chemins Storage **avant** le CASCADE, puis supprime le bien.
+- Clés étrangères vérifiées : `property_media`, `sales_pipeline`, `property_visits`,
+  `property_recommendations`, `property_availability` = **ON DELETE CASCADE** ;
+  `revenue_operations` et `appointments` = **ON DELETE SET NULL** → le CA survit à
+  la suppression du bien (détaché), les opportunités/visites disparaissent.
+  Aucun RESTRICT : la suppression ne peut pas échouer sur un bien avec du CA.
+
+**Front**
+- `src/components/property-lifecycle.tsx` :
+  - `PropertyLifecyclePanel` (fiche bien) : bouton **Archiver** (libellé renforcé
+    « Archiver ce bien vendu/loué » quand `status ∈ sold, rented`), **Restaurer**,
+    **Supprimer définitivement**. Confirmation dans une feuille dédiée avec la liste
+    chiffrée de l'impact (photos purgées, opérations de CA conservées mais détachées,
+    opportunités et visites perdues) et un avertissement « pensez à archiver » dès
+    qu'il y a du CA. Après suppression : purge du bucket `property-images` puis
+    retour à `/biens`.
+  - `ArchivedPropertiesPanel` (page Biens) : tiroir « Biens archivés » replié par
+    défaut, compteur, mention « Non comptés dans la limite de biens de votre offre ·
+    CA et historique conservés », actions Restaurer / Supprimer.
+  - **Lecture seule pour un agent** : encart `permission-note`, aucun bouton.
+- `useProperties` exclut désormais les biens archivés (`.eq('is_archived', false)`) ;
+  nouveau `useArchivedProperties`. Les 3 listes de colonnes dupliquées
+  (create/update/all-properties) sont remplacées par la constante `PROPERTY_COLUMNS`.
+- La fiche d'un bien archivé reste consultable (recherche dans les deux requêtes)
+  avec un bandeau « Bien archivé le … ».
+- Espace plateforme (`pages/admin/properties.tsx`) : pastille « Archivé par l'agence »
+  pour distinguer l'archivage agence (`is_archived`) de la modération plateforme
+  (`status='archived'`), dans le tableau et le tiroir de détail.
+- `pnpm run typecheck` OK · `pnpm run build` OK.

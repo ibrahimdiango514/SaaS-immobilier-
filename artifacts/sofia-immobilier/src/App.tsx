@@ -28,7 +28,7 @@ import {
   useCreatePipelineItem, useUpdatePipelineItem, useUpdateAgency, useUpdateCurrentProfile,
   usePropertyMedia, useUploadPropertyMedia, useDeletePropertyMedia,
   useUploadPropertyMediaBatch, useDeletePropertyMediaMany, useReorderPropertyMedia,
-  useAgencyMediaRefs, useAccountState, getAccountState, isBlockedAccount,
+  useAgencyMediaRefs, useAccountState, getAccountState, isBlockedAccount, useArchivedProperties,
   useRevenueOperations,
   usePlatformRole, useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead,
   getCurrentProfileQueryKey,
@@ -42,6 +42,8 @@ import { formatQuota, splitByPhotoQuota, usePhotoQuota } from '@/lib/plan-limits
 import { PhotoQuotaBar } from '@/components/photo-quota';
 import { AgencyLogo } from '@/lib/workspace-ui';
 import { AgencyLogoCard } from '@/components/agency-logo-card';
+// BLOC 6 : archivage et suppression d'un bien (autorisations tranchees cote serveur).
+import { ArchivedPropertiesPanel, PropertyLifecyclePanel } from '@/components/property-lifecycle';
 // BLOC 4 : tracé précis des modifications des informations de l'agence.
 import { diffAgencyFields, traceAgencySettingsChange } from '@/lib/agency-activity';
 import { ThemeToggle } from '@/lib/theme';
@@ -640,7 +642,9 @@ function PropertyDialog({ open, onOpenChange, item, currency }: { open: boolean;
 }
 
 function PropertiesPage() {
-  const { activeAgencyId, activeAgency } = useAgency(); const query = useProperties(activeAgencyId);
+  const { activeAgencyId, activeAgency, canManageAgency } = useAgency(); const query = useProperties(activeAgencyId);
+  // BLOC 6 : message du panneau « Biens archivés ».
+  const [archivedNotice, setArchivedNotice] = useState('');
   const mediaRefsQ = useAgencyMediaRefs(activeAgencyId);
   const coverByProperty = useMemo(() => {
     const map = new Map<string, string>();
@@ -663,6 +667,9 @@ function PropertiesPage() {
     <section className="list-toolbar property-toolbar"><label className="list-search"><Search size={15} /><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Référence, type ou localisation" aria-label="Rechercher un bien" data-testid="input-search-properties" /></label><span className="result-count" data-testid="text-properties-count">{query.data ? `${rows.length} ${rows.length === 1 ? 'bien' : 'biens'}` : '—'}</span><div className="view-switch" aria-label="Mode d’affichage"><button type="button" className={mode==='table'?'selected':''} onClick={()=>setMode('table')} aria-label="Vue tableau"><List size={15}/></button><button type="button" className={mode==='cards'?'selected':''} onClick={()=>setMode('cards')} aria-label="Vue cartes"><LayoutGrid size={15}/></button></div></section>
     <section className="filter-strip" aria-label="Filtres des biens"><select className="form-select" value={status} onChange={(e)=>setStatus(e.target.value)} aria-label="Filtrer par statut" data-testid="filter-property-status"><option value="all">Tous les statuts</option>{Object.entries(propertyStatus).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select><select className="form-select" value={kind} onChange={(e)=>setKind(e.target.value)} aria-label="Filtrer par type ou transaction" data-testid="filter-property-type"><option value="all">Tous les types</option><option value="sale">Vente</option><option value="rent">Location</option><option value="lease">Bail</option>{propertyTypes.map((v)=><option key={v} value={v}>{v}</option>)}</select><select className="form-select" value={neighborhood} onChange={(e)=>setNeighborhood(e.target.value)} aria-label="Filtrer par quartier" data-testid="filter-property-neighborhood"><option value="all">Tous les quartiers</option>{neighborhoods.map((n)=><option key={n} value={n}>{n}</option>)}</select><Input type="number" min="0" value={minPrice} onChange={(e)=>setMinPrice(e.target.value)} placeholder="Prix min. FCFA" aria-label="Prix minimum" data-testid="filter-property-min-price"/><Input type="number" min="0" value={maxPrice} onChange={(e)=>setMaxPrice(e.target.value)} placeholder="Prix max. FCFA" aria-label="Prix maximum" data-testid="filter-property-max-price"/></section>
     {query.isLoading || query.error || !query.data?.length ? <PageDataState loading={query.isLoading} error={query.error} retry={useSafeRetry(query)} count={query.data?.length ?? 0} emptyTitle="Votre portefeuille est encore vide" emptyText="Ajoutez un bien pour commencer à structurer votre portefeuille immobilier." testId="empty-properties" /> : rows.length ? mode === 'table' ? <div className="panel list-panel"><div className="table-wrap"><table className="data-table full-table"><thead><tr><th>Référence</th><th>Bien</th><th>Localisation</th><th>Transaction</th><th>Prix</th><th>Statut</th><th><span className="sr-only">Action</span></th></tr></thead><tbody>{rows.map((p) => <tr key={p.id} data-testid={`row-property-${p.id}`}><td><Link href={`/biens/${p.id}`} className="table-primary-link"><strong>{p.reference}</strong></Link></td><td><Link href={`/biens/${p.id}`} className="table-primary-link table-thumb-link">{coverByProperty.get(p.id) ? <span className="table-thumb"><img src={coverByProperty.get(p.id)} alt="" loading="lazy" /></span> : <span className="table-thumb table-thumb-empty"><Home size={13} /></span>}<span><strong>{p.title}</strong><small>{p.property_type}</small></span></Link></td><td>{p.neighborhood || '—'}<small>{p.city || '—'}</small></td><td>{p.transaction_type === 'sale' ? 'Vente' : p.transaction_type === 'rent' ? 'Location' : 'Bail'}</td><td>{cash(p.price, p.currency)}</td><td><span className={`status-pill status-${p.status}`}>{propertyStatus[p.status] ?? p.status}</span></td><td><button className="row-action" onClick={() => { setEditing(p); setOpen(true); }} aria-label={`Modifier ${p.title}`} data-testid={`button-edit-property-${p.id}`}><Pencil size={14} /><span>Modifier</span></button></td></tr>)}</tbody></table></div></div> : <div className="property-card-grid">{rows.map((p) => <article className="property-card" key={p.id}><div className="property-card-media">{coverByProperty.get(p.id) ? <img src={coverByProperty.get(p.id)} alt="" loading="lazy" /> : <div className="property-card-media-empty"><Home size={20} /></div>}<span className={`status-pill status-${p.status}`}>{propertyStatus[p.status] ?? p.status}</span></div><div className="property-card-top"><span>{p.reference}</span></div><Link href={`/biens/${p.id}`} className="property-card-title"><h2>{p.title}</h2></Link><p>{p.property_type} · {p.neighborhood || p.city || 'Localisation non renseignée'}</p><strong className="property-card-price">{cash(p.price,p.currency)}</strong><div className="property-card-foot"><span>{p.transaction_type==='sale'?'Vente':p.transaction_type==='rent'?'Location':'Bail'}</span><button className="row-action" onClick={() => { setEditing(p); setOpen(true); }} aria-label={`Modifier ${p.title}`}><Pencil size={14}/> Modifier</button></div></article>)}</div> : <div className="state-card compact-empty" data-testid="empty-filtered-properties"><div className="state-icon"><Search size={19} /></div><h2>Aucun résultat pour ces filtres</h2><p>Essayez une autre référence, un autre quartier ou élargissez la fourchette de prix.</p><Button variant="outline" onClick={() => { setSearch(''); setStatus('all'); setKind('all'); setNeighborhood('all'); setMinPrice(''); setMaxPrice(''); }} data-testid="button-clear-property-search">Effacer les filtres</Button></div>}
+    {/* BLOC 6 : biens archives — masques des listes ci-dessus, CA et historique conserves. */}
+    <ArchivedPropertiesPanel agencyId={activeAgencyId} canManage={canManageAgency} onRestore={(text, error) => setArchivedNotice(error ? `⚠ ${text}` : text)} />
+    {archivedNotice && <p className={archivedNotice.startsWith('⚠') ? 'form-error' : 'form-feedback'} role="status" data-testid="status-archived-notice">{archivedNotice}</p>}
     <PropertyDialog key={editing?.id ?? 'new-property'} open={open} onOpenChange={setOpen} item={editing} currency={activeAgency?.currency ?? 'XOF'} />
   </>;
 }
@@ -737,7 +744,12 @@ function AgencyPage() {
 function PropertyDetailPage() {
   const params = useParams<{ id: string }>(); const id = params.id;
   const { activeAgencyId, activeMembership, canManageAgency } = useAgency(); const propertiesQ = useProperties(activeAgencyId);
-  const item = propertiesQ.data?.find((property) => property.id === id) ?? null;
+  // BLOC 6 : la fiche d'un bien archive doit rester consultable.
+  const [, navigate] = useLocation();
+  const archivedQ = useArchivedProperties(activeAgencyId);
+  const item = propertiesQ.data?.find((property) => property.id === id)
+    ?? archivedQ.data?.find((property) => property.id === id)
+    ?? null;
   const media = usePropertyMedia(activeAgencyId, id);
   // BLOC 3 : compteur « 7/10 » de la galerie.
   const photoQuota = usePhotoQuota(activeAgencyId, media.data?.length ?? 0);
@@ -756,7 +768,7 @@ function PropertyDetailPage() {
       trackView.mutate();
     }
   }, [item, trackView]);
-  if (propertiesQ.isLoading) return <><Heading eyebrow="Portefeuille" title="Fiche du bien" description="Chargement du dossier immobilier."/><LoadingRows/></>;
+  if (propertiesQ.isLoading || archivedQ.isLoading) return <><Heading eyebrow="Portefeuille" title="Fiche du bien" description="Chargement du dossier immobilier."/><LoadingRows/></>;
   if (propertiesQ.error) return <><Heading eyebrow="Portefeuille" title="Fiche du bien" description="Les informations du dossier ne sont pas disponibles."/><ErrorState error={propertiesQ.error} retry={useSafeRetry(propertiesQ)}/></>;
   if (!item) return <><Heading eyebrow="Portefeuille" title="Bien introuvable" description="Ce dossier n’est pas présent dans le portefeuille de l’agence active."/><Link href="/biens" className="text-action">Retour aux biens <ArrowRight size={13}/></Link></>;
   const doUploadFiles = async (files: FileList | null) => {
@@ -815,6 +827,8 @@ function PropertyDetailPage() {
         <div className="photo-upload"><label className={`upload-control${uploadBatch.isPending?' is-busy':''}`}><input type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={uploadBatch.isPending} onChange={(e)=>{void doUploadFiles(e.target.files); e.currentTarget.value='';}}/><ImagePlus size={15}/>{uploadBatch.isPending?'Envoi en cours…':'Ajouter des photos'}</label><p>JPG, PNG ou WebP · compression automatique · {photoQuota.unlimited ? 'nombre illimité' : `${photoQuota.limit} maximum par bien (offre ${photoQuota.planName})`} · la 1re photo devient la couverture.</p><div className="public-bucket-warning"><ShieldCheck size={15}/><span>Le bucket actuel étant public, une photo enregistrée peut être récupérée par toute personne connaissant son URL ; l’application ne rend pas ce stockage privé.</span></div>{notice && <p className={notice.includes('Impossible')?'form-error':'form-feedback'} role="status">{notice}</p>}</div>
       </section></div>
     <div className="related-record"><h2>Fiche du bien</h2><span>Créé le {dateLabel(item.created_at)}</span></div>
+    {/* BLOC 6 : archivage (CA conserve) et suppression (photos purgees, impact chiffre). */}
+    <PropertyLifecyclePanel property={item} agencyId={activeAgencyId} canManage={canDelete} onDeleted={() => navigate('/biens')} />
     {editing && <PropertyDialog key={item.id} open={editing} onOpenChange={setEditing} item={item} currency={item.currency}/>}
     {activeImage && <div className="lightbox" role="dialog" aria-modal="true" aria-label="Aperçu de la photo" onClick={()=>setActiveImage(null)}><button type="button" className="icon-button lightbox-close" onClick={()=>setActiveImage(null)} aria-label="Fermer l’aperçu"><X size={18}/></button><img src={activeImage} alt={item.title} onClick={(e)=>e.stopPropagation()}/></div>}
   </>;

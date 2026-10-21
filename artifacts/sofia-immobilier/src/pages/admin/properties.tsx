@@ -227,6 +227,13 @@ export default function AdminPropertiesPage() {
                     </td>
                     <td>
                       <span className={`status-pill status-${property.status}`}>{propertyStatus[property.status] ?? property.status}</span>
+                      {/* BLOC 6 : archivage côté agence (colonne is_archived), distinct
+                          de la modération plateforme (status='archived'). */}
+                      {property.is_archived && (
+                        <span className="agency-archived-pill" title="Masqué des listes de l'agence mais conservé dans son CA" data-testid={`badge-agency-archived-${property.id}`}>
+                          Archivé par l’agence
+                        </span>
+                      )}
                     </td>
                     <td className="row-actions-cell">
                       <button className="row-action" onClick={() => setDetail(property)} data-testid={`button-detail-property-${property.id}`}>
@@ -270,6 +277,9 @@ export default function AdminPropertiesPage() {
                 <div className="detail-pricebar">
                   <div><span className="form-kicker">Prix</span><strong>{cash(detail.price, detail.currency)}</strong></div>
                   <span className={`status-pill status-${detail.status}`}>{propertyStatus[detail.status] ?? detail.status}</span>
+                  {detail.is_archived && (
+                    <span className="agency-archived-pill" data-testid="badge-agency-archived-detail">Archivé par l’agence</span>
+                  )}
                 </div>
                 <div className="detail-facts">
                   <div><span>Transaction</span><strong>{detail.transaction_type === 'sale' ? 'Vente' : detail.transaction_type === 'rent' ? 'Location' : 'Bail'}</strong></div>

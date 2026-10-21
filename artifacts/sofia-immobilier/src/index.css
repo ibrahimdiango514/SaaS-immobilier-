@@ -3203,3 +3203,169 @@ input, .form-select, textarea {
   .roster-row { flex-wrap: wrap; }
   .roster-row .icon-button { min-width: 44px; min-height: 44px; }
 }
+
+/* =============================================================================
+   BLOC 6 — ARCHIVAGE ET SUPPRESSION D'UN BIEN
+   ============================================================================= */
+.lifecycle-panel .panel-head { align-items: flex-start; }
+.lifecycle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+.lifecycle-actions .btn,
+.lifecycle-actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.danger-action {
+  color: var(--si-danger);
+  border-color: color-mix(in srgb, var(--si-danger) 45%, var(--si-border));
+}
+.danger-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--si-danger) 12%, transparent);
+  border-color: var(--si-danger);
+}
+button.row-action.danger-action { color: var(--si-danger); }
+
+.notice-box.is-warning {
+  border-color: var(--si-border-gold);
+  background: var(--si-bg-warm);
+}
+
+/* Feuille de confirmation de suppression (sans bibliothèque de modale) */
+.confirm-sheet {
+  display: none;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--si-danger) 35%, var(--si-border));
+  background: var(--si-surface-2);
+}
+.confirm-sheet.is-open { display: block; }
+.confirm-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--si-danger);
+  font-size: 14px;
+}
+.confirm-sheet-head strong { flex: 1; color: var(--si-text); font-size: 14px; }
+.confirm-sheet-head .icon-button { transform: rotate(180deg); }
+
+.impact-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+.impact-list li {
+  font-size: 12.8px;
+  color: var(--si-text-muted);
+  padding-left: 12px;
+  border-left: 2px solid var(--si-border-strong);
+}
+.impact-list li strong { color: var(--si-text); font-variant-numeric: tabular-nums; }
+.impact-list li.is-warn { border-left-color: var(--si-gold); }
+.impact-list li.is-danger { border-left-color: var(--si-danger); }
+
+.confirm-sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+.confirm-sheet-actions button { min-height: 44px; }
+
+/* Panneau « Biens archivés » de la page Biens */
+.archived-panel { margin-top: 16px; padding: 0; overflow: hidden; }
+.archived-toggle {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 4px 11px;
+  padding: 14px 16px;
+  min-height: 44px;
+  background: none;
+  border: 0;
+  color: var(--si-text);
+  cursor: pointer;
+  text-align: left;
+}
+.archived-toggle > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.archived-toggle > span strong {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--si-surface-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.archived-toggle > small {
+  grid-column: 2;
+  color: var(--si-text-muted);
+  font-size: 11.8px;
+}
+.archived-chevron {
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(-90deg);
+  transition: transform 160ms ease;
+  color: var(--si-text-muted);
+}
+.archived-chevron.is-open { transform: rotate(90deg); }
+
+.archived-list { border-top: 1px solid var(--si-border); }
+.archived-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--si-border);
+}
+.archived-row:last-child { border-bottom: 0; }
+.archived-copy { flex: 1; min-width: 190px; display: grid; gap: 2px; }
+.archived-copy strong { font-size: 13.2px; color: var(--si-text); }
+.archived-copy span { font-size: 11.8px; color: var(--si-text-muted); }
+.archived-actions { display: flex; gap: 8px; }
+.archived-panel > .form-hint,
+.archived-panel > .form-error { padding: 12px 16px; margin: 0; border-top: 1px solid var(--si-border); }
+
+.status-pill.status-archived { opacity: 0.75; }
+
+@media (max-width: 640px) {
+  .confirm-sheet-actions button { flex: 1; justify-content: center; }
+  .archived-row { padding: 12px 14px; }
+  .archived-actions { width: 100%; }
+  .archived-actions .row-action { flex: 1; justify-content: center; min-height: 44px; }
+}
+
+/* BLOC 6 : archivage côté agence vu depuis l'espace plateforme */
+.agency-archived-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--si-border-strong);
+  background: var(--si-surface-3);
+  color: var(--si-text-muted);
+  font-size: 10.8px;
+  font-weight: 600;
+  white-space: nowrap;
+}

@@ -114,6 +114,9 @@ export interface PropertyRow {
   metadata: Json;
   created_at: string;
   updated_at: string;
+  /** BLOC 6 : bien masqué des listes courantes mais conservé (historique, CA). */
+  is_archived: boolean;
+  archived_at: string | null;
 }
 
 export interface PropertyMediaRow {
