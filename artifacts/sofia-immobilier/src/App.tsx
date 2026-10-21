@@ -58,6 +58,7 @@ import WelcomePage from '@/pages/welcome';
 import TeamPage from '@/pages/team';
 import JoinAgencyPage from '@/pages/rejoindre';
 import ForcePasswordPage from '@/pages/force-password';
+import MyOfferPage from '@/pages/my-offer';
 import { Area, AreaChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { bucketize, computeStats, periodRange } from '@/lib/revenue-utils';
 
@@ -73,6 +74,7 @@ const nav = [
   { href: '/assistant-ia', label: 'Assistant IA', icon: CircleHelp },
   { href: '/automatisations', label: 'Automatisations', icon: RefreshCw },
   { href: '/agence', label: 'Agence et membres', icon: UsersRound },
+  { href: '/mon-offre', label: 'Mon offre', icon: Wallet },
   { href: '/equipe', label: 'Équipe', icon: UserCog },
   { href: '/profil', label: 'Mon profil', icon: UserRound },
   { href: '/parametres', label: 'Paramètres', icon: Settings2 },
@@ -941,6 +943,7 @@ function RoutedContent() {
     <Route path="/assistant-ia" component={AssistantPage} />
     <Route path="/automatisations" component={AutomationsPage} />
     <Route path="/agence" component={AgencyPage} />
+    <Route path="/mon-offre" component={MyOfferPage} />
     <Route path="/equipe" component={TeamPage} />
     <Route path="/parametres" component={SettingsPage} />
     <Route component={NotFound} />

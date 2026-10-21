@@ -2806,3 +2806,37 @@ input, .form-select, textarea {
 
 .member-role { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--si-border); color: var(--si-text-muted); white-space: nowrap; }
 .owner-lock { display: inline-flex; align-items: center; color: var(--si-gold-text, var(--si-text-muted)); }
+
+/* =============================================================================
+   LOT B (point B) — PAGE « MON OFFRE »
+   Jetons --si-* existants uniquement : lisible en clair comme en sombre.
+   ============================================================================= */
+.offer-layout { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+.offer-current .offer-plan-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 14px; }
+.offer-plan-mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--si-bg); border: 1px solid var(--si-border-brand); color: var(--si-brand-text); flex: none; }
+.offer-price { margin: 2px 0 0; font-size: 22px; color: var(--si-text); }
+.offer-price span { font-size: 13px; color: var(--si-text-muted); }
+.offer-facts { display: grid; gap: 8px; margin-bottom: 14px; }
+.offer-facts div { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--si-text-muted); }
+.offer-facts strong { color: var(--si-text); }
+
+.offer-alert { display: flex; gap: 12px; align-items: flex-start; padding: 14px; margin-bottom: 16px; border-radius: 12px; border: 1px solid var(--si-border-gold); background: var(--si-bg-warm); color: var(--si-gold-text, var(--si-text)); }
+.offer-alert.is-overdue { border-color: var(--si-danger); color: var(--si-danger-text); }
+.offer-alert p { margin: 3px 0 0; font-size: 13px; }
+
+.usage-meter { margin-bottom: 14px; }
+.usage-meter-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--si-text-muted); margin-bottom: 6px; }
+.usage-meter-head span { display: inline-flex; align-items: center; gap: 7px; }
+.usage-meter-head strong { color: var(--si-text); }
+.usage-bar { height: 8px; border-radius: 999px; background: var(--si-border-soft); overflow: hidden; }
+.usage-bar span { display: block; height: 100%; border-radius: 999px; background: var(--si-brand); transition: width .3s ease; }
+.usage-bar span.is-full { background: var(--si-danger); }
+.usage-limit-note { margin: 6px 0 0; font-size: 12.5px; color: var(--si-danger-text); }
+.usage-caption { margin: 4px 0 0; font-size: 12.5px; color: var(--si-text-muted); }
+
+.module-list { display: grid; gap: 6px; }
+.module-row { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 9px; font-size: 13.5px; color: var(--si-text); border: 1px solid var(--si-border-soft); }
+.module-row em { margin-left: auto; font-style: normal; font-size: 12px; color: var(--si-text-muted); }
+.module-row.is-locked { color: var(--si-text-muted); background: var(--si-bg); }
+.upgrade-block { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--si-border-soft); display: grid; gap: 10px; }
+.upgrade-options { display: flex; flex-wrap: wrap; gap: 8px; }

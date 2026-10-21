@@ -213,7 +213,7 @@ export type PropertyMediaUploadInput = {
 };
 
 const PROPERTY_IMAGES_BUCKET = 'property-images';
-const MAX_PROPERTY_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_PROPERTY_IMAGE_SIZE = 5 * 1024 * 1024;
 const SUPPORTED_PROPERTY_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function sanitizePropertyReference(reference: string) {
@@ -225,7 +225,7 @@ function validatePropertyImage(file: File) {
     throw new Error('Utilisez une image JPG, PNG ou WebP.');
   }
   if (file.size > MAX_PROPERTY_IMAGE_SIZE) {
-    throw new Error('Chaque image doit peser 10 Mo maximum.');
+    throw new Error('Chaque image doit peser 5 Mo maximum après compression.');
   }
 }
 
