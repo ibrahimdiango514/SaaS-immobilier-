@@ -1750,3 +1750,116 @@ invalide faisait planter l'écran entier.
 Correctif **100 % frontend** : ni migration, ni RLS, ni Edge Function redéployée.
 Le RPC `platform_subscription_revenue` est inchangé (son type de retour était simplement
 mal interprété par le client).
+
+---
+
+# SESSION 3 — CORRECTIFS SYSTÈME, ESSAI, ALERTES (branche `arena/258827d7-saas-immobilier`)
+
+> Base de départ : `66ccc75` (aucune branche existante réécrite, aucun push sur
+> `main` ni sur la branche de production Netlify).
+
+## BLOC 1 — BUGS SYSTÈME : TERMINÉ
+
+### Causes racines trouvées en base (vérifiées, pas supposées)
+
+1. **Offre non reconnue.** Le bouton « Activer » de la console admin faisait un
+   `UPDATE agencies.status='active'` direct, **sans créer de ligne
+   `agency_subscriptions`**. Constat : l'agence « Immo Diango » était `active`
+   avec `plan_id = NULL` et aucune ligne d'abonnement. `agency_current_plan()`
+   ne renvoyait donc rien → `useModuleAccess().has()` = false → vue d'ensemble
+   verrouillée.
+2. **Seule l'agence de test visible.** Il n'existait **aucune politique RLS de
+   SELECT pour l'administrateur plateforme** sur `agencies`,
+   `agency_subscriptions` et `agency_members`. Seule `agencies_select_member`
+   existait : l'admin ne voyait que les agences dont il est membre.
+3. **Graphiques figés.** Même cause RLS (abonnements des autres agences
+   invisibles) + clés de cache `plan`, `subscriptions`, `subscription-payments`
+   et `platform-summary` non invalidées après changement d'offre, validation de
+   paiement ou suspension.
+4. **Création d'agent impossible.** `agency_seat_availability()` utilisait
+   `COALESCE(max_members, 1)` quand l'offre est absente → `seats_limit = 1`,
+   propriétaire = 1 place → `available = 0` → l'Edge Function renvoyait
+   `member_limit_reached` **avant** de créer le compte. Ce n'était ni CORS, ni
+   le JWT, ni la version déployée (v6/v5, `verify_jwt=true`, conformes).
+
+### Corrections appliquées
+
+- `public.agency_plan_state(uuid)` : **source unique** de l'état de l'offre
+  (`active | trial | overdue | suspended_overdue | no_plan | pending | cancelled`).
+- `public.admin_assign_plan(agency_id, plan_id, status, note)` : **seul écrivain**
+  de l'offre. Crée l'abonnement s'il manque, active l'agence `pending`.
+- `admin_change_agency_plan` et `admin_activate_pending_agency` délèguent à lui.
+- `public.admin_activate_agency(agency_id, plan_id?)` : bouton « Activer ».
+- `review_payment_declaration` : crée l'abonnement au lieu de lever
+  « aucun abonnement pour cette agence ».
+- RLS : 9 politiques `*_platform_admin` ajoutées (SELECT/INSERT/UPDATE) sur
+  `agencies`, `agency_subscriptions`, `agency_members`, `payment_declarations`,
+  `plans`. Permissives : rien n'est retiré aux agences.
+- Données réparées : toute agence `active` sans abonnement a reçu l'offre la
+  moins chère (« Immo Diango » → Essentiel, 3 places, 2 disponibles).
+- Front : `useModuleAccess` expose `planMissing` ; `dashboard` n'est **jamais**
+  verrouillé ; `PlanStatusBanner` sur toutes les pages (« Essai : X jours »,
+  « Aucune offre active », « En retard »).
+- Console agences : filtres Essai / En attente / Active / En retard /
+  Suspendue / Sans offre + changement d'offre en un clic + extension/fin d'essai.
+- Équipe : **écran de diagnostic** (étape + code + HTTP + détail serveur).
+
+## BLOC 2 — ESSAI GRATUIT 14 JOURS : TERMINÉ
+
+- `platform_settings.signup = {require_admin_validation:false, trial_days:14}`
+  et `platform_settings.trial = {agent_messages:200}`.
+- `public.agency_start_trial(agency_id, plan_id)` : crée
+  `agency_subscriptions.status='trial'`, `trial_ends_at = now()+14 j`,
+  `ends_at = trial_ends_at`. **Le compte à rebours payant démarre à la fin de
+  l'essai** : les jours d'essai ne sont pas déduits du premier mois.
+  Un seul essai par agence. Si `require_admin_validation = true`, l'agence reste
+  `pending` (écran d'attente).
+- `agency_change_plan_during_trial` : changement d'offre immédiat pendant l'essai.
+- `admin_extend_trial` (+N jours) et `admin_end_trial` (conversion en actif).
+- `agency_effective_quota` : plafond 200 messages pendant l'essai, sinon celui de l'offre.
+- `suspend_overdue_agencies()` ignorait **déjà** les essais valides : garde-fou conservé.
+- Réglages admin : durée d'essai + case « validation requise avant ouverture ».
+- Les agences existantes n'ont reçu aucun essai.
+
+## BLOC 3 — ALERTES ADMIN : TERMINÉ
+
+- Table additive `saas_immobilier.admin_alerts` (RLS admin uniquement,
+  `alert_key` UNIQUE pour l'idempotence).
+- 4 triggers : nouvelle agence, suspension, abonnement (essai / activation /
+  changement d'offre), paiement déclaré.
+- `public.admin_scan_alerts()` : essai à J-3, impayé.
+- `public.admin_alerts(limit)` et `admin_mark_alert(id, read)`.
+- UI : cloche + compteur sur toutes les pages admin (mobile compris), carte
+  « À traiter » en haut de la vue d'ensemble, priorité colorée, action directe,
+  états non lu / traité, rafraîchissement **30 s**.
+
+## BLOC 4 — CONTRAT : NON APPLIQUÉ (méthode PDF à valider d'abord)
+
+Schéma préparé, aucune écriture en base. Voir la méthode de génération du PDF
+proposée dans le résumé de session : elle doit être validée **avant** création
+des modèles, de la table `contracts` et du bucket privé.
+
+## BLOC 5 — DASHBOARD INTELLIGENT : NON COMMENCÉ
+
+## Tests manuels (navigateur requis — le sandbox n'atteint pas `*.supabase.co`)
+
+1. Créer une **nouvelle agence** avec un autre email → elle doit ouvrir le
+   dashboard **en essai 14 jours** et afficher le bandeau « Essai : X jours ».
+2. Console admin → Agences : **toutes** les agences doivent apparaître, y
+   compris la nouvelle ; filtres Essai / Sans offre / En retard.
+3. Changer l'offre en un clic → la pastille et les KPI changent immédiatement.
+4. Onglet Équipe → créer un agent **par création directe** : le mot de passe
+   temporaire doit s'afficher une seule fois (plus de `member_limit_reached`).
+5. Créer un agent **par lien d'invitation**, puis ouvrir le lien en navigation privée.
+6. Passer une déclaration de paiement → la cloche admin doit afficher une alerte
+   « Paiement déclaré » dans les 30 s.
+7. Terminer un essai depuis la fiche agence → statut « Active » + échéance à 30 jours.
+8. Vérifier le mode sombre sur le bandeau d'état et les pastilles d'alerte.
+
+## Ce qui n'a pas pu être vérifié sans navigateur
+
+- Rendu réel (clair/sombre, mobile) du bandeau d'état, de la cloche et des pastilles.
+- Appels réels aux Edge Functions `create-agency-member` et `invite-agency-member`
+  (elles n'ont pas été modifiées : le blocage venait du plafond de places calculé
+  en base, désormais corrigé).
+- Comportement réel de l'assistant IA avec le plafond d'essai (200 messages).
