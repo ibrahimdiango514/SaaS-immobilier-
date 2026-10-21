@@ -11,7 +11,7 @@
 // l'écran en lecture seule.
 // =============================================================================
 import { useEffect, useMemo, useState } from 'react';
-import { Info, KeyRound, LockKeyhole, Phone, Save, ShieldCheck, Timer } from 'lucide-react';
+import { Info, KeyRound, LockKeyhole, Phone, Save, ShieldCheck, Sparkles, Timer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -19,6 +19,8 @@ import { useAuth } from '@/lib/auth-context';
 import { usePlatformRole } from '@/lib/data-hooks';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
+// BLOC 2 (session 3) : réglages de l'essai gratuit et de la validation admin.
+import { adminSetSignupSettings } from '@/lib/trial-api';
 import { LoadingRows, dateTimeLabel } from '@/lib/workspace-ui';
 import {
   readBillingSettings, readPaymentInstructions, usePlatformSettings,
@@ -38,6 +40,10 @@ export default function AdminSettingsPage() {
   const [beneficiary, setBeneficiary] = useState('');
   const [note, setNote] = useState('');
   const [graceDays, setGraceDays] = useState('5');
+  const [requireValidation, setRequireValidation] = useState(false);
+  const [trialDays, setTrialDays] = useState('14');
+  const [trialMessage, setTrialMessage] = useState('');
+  const [trialBusy, setTrialBusy] = useState(false);
   const [message, setMessage] = useState('');
 
   const isOwner = roleQ.data?.platformAdmin?.role === 'platform_owner';
@@ -301,6 +307,84 @@ export default function AdminSettingsPage() {
               >
                 <Save size={14} /> {update.isPending ? 'Enregistrement…' : 'Enregistrer le délai'}
               </Button>
+            </div>
+          </div>
+        </section>
+
+        {/* BLOC 2 (session 3) — ESSAI GRATUIT ET VALIDATION À L'INSCRIPTION. */}
+        <section className="panel settings-panel" data-testid="panel-trial-settings">
+          <div className="settings-heading">
+            <div className="settings-icon"><Sparkles size={17} /></div>
+            <div>
+              <h2>Essai gratuit et ouverture des comptes</h2>
+              <p>
+                Durée de l’essai et contrôle d’accès des nouvelles agences.
+                Par défaut, une nouvelle agence ouvre son tableau de bord
+                immédiatement en essai, sans validation.
+              </p>
+            </div>
+            <span className={`permission-badge${isOwner ? ' allowed' : ''}`}>
+              <KeyRound size={13} /> {isOwner ? 'Modification autorisée' : 'Lecture seule'}
+            </span>
+          </div>
+
+          <div className="settings-form">
+            <div className="form-field">
+              <label className="form-label" htmlFor="setting-trial-days">Durée de l’essai (jours)</label>
+              <Input
+                id="setting-trial-days"
+                type="number"
+                min="1"
+                max="90"
+                step="1"
+                value={trialDays}
+                onChange={(e) => setTrialDays(e.target.value)}
+                disabled={disabled}
+                data-testid="input-setting-trial-days"
+              />
+              <small className="form-hint">
+                <ShieldCheck size={12} /> Un seul essai par agence. Les jours d’essai
+                ne sont jamais déduits de la première période payée.
+              </small>
+            </div>
+            <div className="form-field">
+              <label className="form-label" htmlFor="setting-require-validation">
+                <input
+                  id="setting-require-validation"
+                  type="checkbox"
+                  checked={requireValidation}
+                  onChange={(e) => setRequireValidation(e.target.checked)}
+                  disabled={disabled}
+                  data-testid="checkbox-require-admin-validation"
+                />{' '}
+                Validation administrateur requise avant ouverture du dashboard
+              </label>
+              <small className="form-hint">
+                <Info size={12} /> Décoché (par défaut) : la nouvelle agence entre
+                directement en essai. Coché : elle attend votre validation.
+              </small>
+            </div>
+            <div className="form-actions">
+              <Button
+                type="button"
+                disabled={disabled || trialBusy}
+                onClick={() => {
+                  setTrialMessage('');
+                  setTrialBusy(true);
+                  adminSetSignupSettings(requireValidation, Number(trialDays) || 14)
+                    .then((settings) => {
+                      setTrialDays(String(settings.trial_days));
+                      setRequireValidation(settings.require_admin_validation);
+                      setTrialMessage('Réglages de l’essai enregistrés.');
+                    })
+                    .catch((error: unknown) => setTrialMessage(getSupabaseErrorMessage(error, 'enregistrer les réglages de l’essai')))
+                    .finally(() => setTrialBusy(false));
+                }}
+                data-testid="button-save-trial-settings"
+              >
+                <Save size={14} /> {trialBusy ? 'Enregistrement…' : 'Enregistrer l’essai'}
+              </Button>
+              {trialMessage && <span className="form-hint" role="status">{trialMessage}</span>}
             </div>
           </div>
         </section>

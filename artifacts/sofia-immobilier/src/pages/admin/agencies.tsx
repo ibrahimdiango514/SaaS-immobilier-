@@ -26,6 +26,8 @@ import {
 } from '@/lib/data-hooks';
 import type { AgencyRow } from '@/lib/database.types';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
+// BLOC 2 (session 3) : l'administrateur prolonge ou termine un essai.
+import { adminEndTrial, adminExtendTrial } from '@/lib/trial-api';
 import { AdminHeading } from './admin-shell';
 import { LoadingRows, cash, dateLabel, dateTimeLabel, downloadCsv, roleNames } from '@/lib/workspace-ui';
 
@@ -102,6 +104,22 @@ export default function AdminAgenciesPage() {
     (agenciesQ.data?.members ?? []).filter((member) => member.agency_id === agencyId);
   const propertyCountFor = (agencyId: string) =>
     (propertiesQ.data ?? []).filter((property) => property.agency_id === agencyId).length;
+
+  const trialAction = useMutation({
+    mutationFn: async ({ agencyId, action }: { agencyId: string; action: 'extend' | 'end' }) => {
+      if (action === 'extend') return adminExtendTrial(agencyId, 7);
+      return adminEndTrial(agencyId, 'fin d essai par administrateur');
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: getAllAgenciesQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getPlatformSummaryQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: getActivityLogQueryKey() }),
+        queryClient.invalidateQueries({ queryKey: ['plan'] }),
+      ]);
+    },
+    onError: (error) => setPageError(getSupabaseErrorMessage(error, 'modifier l’essai')),
+  });
 
   const planStateFor = (agency: AgencyRow): string => {
     const subscription = subscriptionFor(agency.id);
@@ -375,6 +393,28 @@ export default function AdminAgenciesPage() {
                     <p className="form-error" role="alert">
                       {getSupabaseErrorMessage(changePlan.error, 'changer l’offre')}
                     </p>
+                  )}
+
+                  {/* BLOC 2 : l'administrateur peut prolonger (+7 j) ou terminer un essai. */}
+                  {planStateFor(detail) === 'trial' && (
+                    <div className="form-actions" style={{ marginTop: 12 }}>
+                      <Button
+                        variant="outline"
+                        disabled={trialAction.isPending}
+                        onClick={() => trialAction.mutate({ agencyId: detail.id, action: 'extend' })}
+                        data-testid="button-extend-trial"
+                      >
+                        Prolonger l’essai de 7 jours
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={trialAction.isPending}
+                        onClick={() => trialAction.mutate({ agencyId: detail.id, action: 'end' })}
+                        data-testid="button-end-trial"
+                      >
+                        Terminer l’essai maintenant
+                      </Button>
+                    </div>
                   )}
                 </div>
 

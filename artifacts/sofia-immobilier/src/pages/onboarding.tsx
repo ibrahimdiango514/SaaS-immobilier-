@@ -3,7 +3,6 @@ import { useLocation } from 'wouter';
 import { ArrowLeft, ArrowRight, Building2, CheckCircle2, ImagePlus, MapPin, Phone, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { BackButton } from '@/components/back-button';
 import { useAllPlans, type PlanRow } from '@/lib/plan-limits';
-import { useSelectPendingPlan } from '@/lib/pending-api';
 import { cash } from '@/lib/workspace-ui';
 
 /** Libellés français des modules, identiques à la page Mon offre. */
@@ -27,6 +26,8 @@ import { useAuth } from '@/lib/auth-context';
 import { validateLogoFile } from '@/lib/agency-logo';
 import { useAgency } from '@/lib/agency-context';
 import { useCreateAgency } from '@/lib/data-hooks';
+// BLOC 2 (session 3) : essai gratuit de 14 jours.
+import { startAgencyTrial, type StartTrialResult } from '@/lib/trial-api';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { BrandMark } from '@/lib/workspace-ui';
 
@@ -58,7 +59,6 @@ export default function OnboardingPage() {
   const createAgency = useCreateAgency();
   // BLOC 2 (session 2) : offre choisie pendant l'inscription.
   const plans = useAllPlans();
-  const selectPlan = useSelectPendingPlan();
   const [chosenPlanId, setChosenPlanId] = useState<string | null>(null);
   const [, navigate] = useLocation();
   const [step, setStep] = useState(0);
@@ -121,19 +121,28 @@ export default function OnboardingPage() {
         description: values.description || null,
         logo,
       });
-      // BLOC 2 : l'agence est creee 'pending'. On enregistre aussitot l'offre
-      // choisie. Un echec ici n'est pas bloquant : l'ecran d'attente permet de
-      // re choisir l'offre, et l'administrateur voit le dossier de toute facon.
+      // BLOC 2 (session 3) — ESSAI GRATUIT.
+      // L'agence est créée, puis l'offre choisie démarre IMMÉDIATEMENT l'essai
+      // de 14 jours (`agency_start_trial`). Si l'administrateur a activé
+      // « validation requise avant ouverture », la fonction renvoie
+      // mode='pending_validation' et l'agence reste sur l'écran d'attente.
+      // Un échec n'est pas bloquant : l'écran d'attente permet de réessayer.
       const created = result as unknown as { id?: string };
       if (chosenPlanId && created?.id) {
         try {
-          await selectPlan.mutateAsync(chosenPlanId);
+          const trial: StartTrialResult = await startAgencyTrial(created.id, chosenPlanId);
+          if (trial.mode === 'pending_validation') {
+            setFormError('');
+          }
         } catch (planError) {
-          console.warn('offre_choisie_non_enregistree', planError);
+          console.warn('essai_non_demarre', planError);
+          setFormError(
+            `Agence créée, mais l’essai n’a pas pu démarrer : ${getSupabaseErrorMessage(planError, 'démarrer l’essai')}`,
+          );
         }
       }
-      // /dashboard est intercepte par WorkspaceGate : une agence 'pending' voit
-      // l'ecran d'attente de validation, pas le tableau de bord.
+      // /dashboard : une agence en essai y accède directement ; une agence
+      // « pending » voit l'écran d'attente de validation.
       navigate('/dashboard');
     } catch (error) {
       const message = getSupabaseErrorMessage(error, 'créer l’agence');
@@ -282,9 +291,12 @@ export default function OnboardingPage() {
                   <header className="onboarding-step-head">
                     <h2>Choisissez votre offre</h2>
                     <p>
-                      Votre agence sera créée <strong>en attente de validation</strong> :
-                      aucun abonnement n’est actif tant que l’administrateur n’a pas
-                      validé votre paiement. Vous pourrez changer d’offre jusque-là.
+                      Votre tableau de bord s’ouvre <strong>immédiatement en essai
+                      gratuit de 14 jours</strong> avec les fonctionnalités et les
+                      limites de l’offre choisie. Aucun paiement n’est demandé
+                      pendant l’essai, et les jours d’essai ne sont pas déduits de
+                      votre première période payante. Vous pouvez changer d’offre
+                      pendant l’essai sans validation.
                     </p>
                   </header>
                   {plans.isLoading ? (
@@ -332,8 +344,9 @@ export default function OnboardingPage() {
                     </div>
                   )}
                   <p className="form-hint" data-testid="hint-onboarding-contract">
-                    Le contrat d’abonnement sera présenté pour signature dans une
-                    prochaine étape. Emplacement réservé, rien à faire pour l’instant.
+                    Le contrat de l’offre choisie vous sera présenté pour signature
+                    par le propriétaire de l’agence. Emplacement réservé au bloc
+                    « Contrat » : rien à faire pour l’instant.
                   </p>
                 </section>
               )}
