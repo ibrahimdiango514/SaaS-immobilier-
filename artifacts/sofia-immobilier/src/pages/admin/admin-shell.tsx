@@ -29,6 +29,8 @@ import { getSupabaseErrorMessage } from '@/lib/supabase';
 // BLOC 9 : en-tête mobile admin + retour déterministe entre espaces.
 import { BackButton } from '@/components/back-button';
 import { trackRoute } from '@/lib/back-navigation';
+// BLOC 3 (session 3) : cloche d'alertes sur toutes les pages admin.
+import { AdminAlertsBell } from '@/components/admin-alerts-bell';
 import { useAgency } from '@/lib/agency-context';
 import { usePendingAgencies } from '@/lib/pending-api';
 import { BrandMark } from '@/lib/workspace-ui';
@@ -237,6 +239,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           </div>
           <GlobalSearch onNavigate={() => setMenuOpen(false)} />
           <div className="topbar-tools">
+            <AdminAlertsBell />
             <ThemeToggle testId="button-theme-toggle-admin" />
             <button type="button" className="icon-button topbar-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" title="Se déconnecter" data-testid="button-admin-topbar-sign-out">
               <LogOut size={15} />

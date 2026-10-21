@@ -44,6 +44,8 @@ import { useSubscriptionRevenue } from '@/lib/admin-billing-api';
 import { Button } from '@/components/ui/button';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
+// BLOC 3 (session 3) : carte « À traiter » en haut de la vue d'ensemble admin.
+import { AdminAlertsCard } from '@/components/admin-alerts-bell';
 import { LoadingRows, cash, dateLabel, dateTimeLabel, downloadCsv, monthShortLabel } from '@/lib/workspace-ui';
 
 const CHART_COLORS = ['#0f766e', '#14b8a6', '#f59e0b', '#64748b', '#e11d48', '#8b5cf6', '#0ea5e9'];
@@ -265,6 +267,8 @@ export default function AdminOverviewPage() {
           </button>
         }
       />
+
+      <AdminAlertsCard />
 
       <section className="kpi-grid" aria-label="Indicateurs clés">
         {kpis.map(({ label, value, foot, icon: Icon, accent }) => (
