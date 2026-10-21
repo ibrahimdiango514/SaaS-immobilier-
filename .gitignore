@@ -28,6 +28,10 @@ node_modules
 !.vscode/extensions.json
 
 # misc
+# Variables d'environnement locales (cles publiques Supabase pour le dev/preview).
+# .env.example reste suivi : c'est le modele partage.
+.env
+.env.local
 /.sass-cache
 /connect.lock
 /coverage
