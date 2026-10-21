@@ -463,7 +463,8 @@ Deno.serve(async (request) => {
     .select('id, name, status').eq('id', agencyId).maybeSingle()
   if (!agencyRow) return json({ error: 'no_agency_membership' }, 403)
 
-  // 3. Agence non suspendue.
+  // 3. Agence non suspendue — et non « pending » (BLOC 2 : le statut doit être
+  //    exactement 'active' pour que le tableau de bord et l'assistant servent).
   const { data: isActive } = await caller.rpc('agence_active', { p_agency_id: agencyId })
   if (isActive !== true || agencyRow.status !== 'active') {
     return json({ error: 'agency_suspended' }, 403)
