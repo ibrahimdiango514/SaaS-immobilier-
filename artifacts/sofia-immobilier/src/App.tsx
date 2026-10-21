@@ -49,6 +49,9 @@ import { AssistantFab } from '@/components/assistant-fab';
 // BLOC 9 : bouton retour partage (agence, admin, pages publiques) + suivi de route.
 import { BackButton } from '@/components/back-button';
 import { trackRoute } from '@/lib/back-navigation';
+// BLOC 2 : ecran d'attente de validation (agence 'pending', dashboard ferme).
+import PendingValidationPage from '@/pages/pending';
+import AdminPendingPage from '@/pages/admin/pending';
 import { DailySummaryCard, SmartAlertsCard } from '@/components/smart-alerts';
 // BLOC 4 : tracé précis des modifications des informations de l'agence.
 import { diffAgencyFields, traceAgencySettingsChange } from '@/lib/agency-activity';
@@ -271,6 +274,12 @@ function WorkspaceGate({ children }: { children: ReactNode }) {
   }
   if (roleQ.data?.isAdmin && !agency.loading && !agency.error && agency.memberships.length === 0) return <Redirect to="/admin" />;
   if (agency.loading || agency.error || !agency.activeAgencyId) return <AppShell><NoAgency isLoading={agency.loading || (agency.memberships.length > 0 && !agency.activeAgencyId)} error={agency.error} retry={() => { void client.invalidateQueries({ queryKey: ['sofia', 'memberships'] }); void client.invalidateQueries({ queryKey: ['sofia', 'agencies'] }); }} /></AppShell>;
+  // BLOC 2 : une agence en attente de validation n'a AUCUNE offre active
+  // (aucune ligne agency_subscriptions). Son tableau de bord reste ferme : elle
+  // voit l'offre choisie, le montant du (installation + premier mois), les
+  // instructions de paiement, le formulaire de declaration et le motif de refus
+  // eventuel. Rendu HORS AppShell : aucune navigation vers les modules.
+  if (agency.activeAgency?.status === 'pending') return <PendingValidationPage />;
   return <AppShell>{children}</AppShell>;
 }
 
@@ -1119,6 +1128,8 @@ function RoutedContent() {
         <Route path="/admin/agences" component={AdminAgenciesPage} />
         <Route path="/admin/biens" component={AdminPropertiesPage} />
         <Route path="/admin/abonnements" component={AdminSubscriptionsPage} />
+        {/* BLOC 2 (session 2) : agences en attente de validation. */}
+        <Route path="/admin/validations" component={AdminPendingPage} />
         <Route path="/admin/paiements" component={AdminBillingPage} />
         <Route path="/admin/reglages" component={AdminSettingsPage} />
         <Route path="/admin/consommation" component={AdminUsagePage} />

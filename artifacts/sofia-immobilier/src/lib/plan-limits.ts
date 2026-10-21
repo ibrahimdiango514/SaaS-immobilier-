@@ -251,3 +251,43 @@ export function usePlanChangeRequests(agencyId?: string) {
     },
   });
 }
+
+
+/* --------------------------------------------------------------------------- */
+/* CATALOGUE DES OFFRES — source unique (page Mon offre, écran d'attente BLOC 2) */
+/* --------------------------------------------------------------------------- */
+
+export interface PlanRow {
+  id: string;
+  name: string;
+  display_name: string;
+  price_monthly: number;
+  /** BLOC 2 : frais d'installation, ajoutés au premier mois pour le montant dû. */
+  setup_fee: number | null;
+  currency: string;
+  modules: string[] | null;
+}
+
+export const getPlansQueryKey = () => ['offre', 'plans'] as const;
+
+/** Les trois offres, de la moins chère à la plus chère. */
+export function useAllPlans() {
+  return useQuery({
+    queryKey: getPlansQueryKey(),
+    staleTime: 60_000,
+    queryFn: async (): Promise<PlanRow[]> => {
+      const { data, error } = await (db() as unknown as {
+        from: (t: string) => {
+          select: (c: string) => {
+            order: (c: string, o: { ascending: boolean }) => Promise<{ data: unknown; error: unknown }>;
+          };
+        };
+      })
+        .from('plans')
+        .select('id, name, display_name, price_monthly, setup_fee, currency, modules')
+        .order('price_monthly', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as PlanRow[];
+    },
+  });
+}

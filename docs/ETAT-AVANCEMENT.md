@@ -1191,3 +1191,99 @@ le lien d'invitation et le rachat via `/rejoindre` restent à valider par vous.
 Le diagnostic d'import manquant est une **déduction** fondée sur
 `list_edge_functions` (absence d'`entrypoint_path`/`ezbr_sha256` pour les fonctions
 déployées par l'API) ; l'inlining supprime le risque dans tous les cas de figure.
+
+## SESSION 2 — BLOC 2 : PARCOURS D'ABONNEMENT À LA CRÉATION (FAIT)
+
+### Principe appliqué
+Une nouvelle agence n'a **plus aucune offre active automatique**.
+`create_agency_for_self` la crée désormais avec `status = 'pending'` et
+**n'insère plus aucune ligne dans `agency_subscriptions`** (avant : `status='active'`
++ abonnement sur l'offre la moins chère, donc accès immédiat au dashboard sans
+paiement ni validation). L'offre choisie est stockée dans la nouvelle colonne
+`agencies.pending_plan_id`. C'est `admin_activate_pending_agency()` qui crée
+l'abonnement actif et calcule l'échéance, au moment de la validation.
+
+**Les agences existantes ne changent pas** : la migration ne contient **aucun
+UPDATE de données**. Les 3 agences actuelles gardent leur statut et leur
+abonnement (`sbc-demo:active`, `iango-agengy:active`, `agence-test-suspendue:suspended`).
+
+### Base
+- **Colonnes additives** : `agencies.pending_plan_id` (FK `plans`, `ON DELETE SET
+  NULL`), `pending_note`, `pending_updated_at` + index partiel
+  `agencies_pending_validation_idx WHERE status='pending'`.
+  `agencies.status` acceptait **déjà** `'pending'` (contrainte
+  `agencies_status_check`) : aucune contrainte modifiée.
+- **Fonction existante modifiée** : `saas_immobilier.create_agency_for_self` —
+  **signature inchangée (11 paramètres)**, donc simple `CREATE OR REPLACE`, aucun
+  risque de surcharge ambiguë. Rollback : définition d'origine recopiée mot pour
+  mot dans le fichier de retour arrière.
+- **Fonctions additives (public)** :
+  - `agency_select_pending_plan(agency_id, plan_id)` → l'agence change d'offre
+    tant que ce n'est pas validé (garde `has_agency_role(...,'admin')`, refus si
+    le statut n'est plus `pending`) ;
+  - `agency_pending_state(agency_id)` → état complet de l'écran d'attente : offre,
+    **montant dû = `setup_fee + price_monthly`**, instructions de paiement lues
+    dans `platform_settings`, dernière déclaration et son statut, motif de refus ;
+  - `admin_activate_pending_agency(agency_id)` → crée l'abonnement `active`
+    (`starts_at = CURRENT_DATE`, `ends_at = +1 mois`), passe l'agence en `active`,
+    efface le motif, notifie le propriétaire, journalise ;
+  - `admin_reject_pending_agency(agency_id, reason)` → **motif obligatoire**,
+    l'agence reste `pending` et voit le motif à sa prochaine connexion ;
+  - `pending_agencies()` → file admin : offre choisie, montant dû, email du
+    propriétaire, dernière déclaration, nombre de déclarations en attente.
+- **Durcissement du wrapper `public.agence_active`** (créé au BLOC 10) :
+  `status <> 'suspended'` → **`status IN ('active','trial')`**. Avant, une agence
+  `pending` (et `cancelled`) passait pour active : elle aurait pu créer des
+  membres, générer des invitations et utiliser l'assistant avant validation.
+  `saas_immobilier.agence_active` (l'originale) n'est **pas** modifiée.
+- Droits : `anon` retiré partout ; les 3 fonctions admin sont `is_platform_admin()`
+  côté base.
+
+### Test du cycle complet exécuté en base (agence jetable, puis supprimée)
+`agence_active(pending)` = **false** ✓ · refus motivé → statut reste `pending` ✓ ·
+validation → statut `active` ✓ · `agence_active` = **true** après validation ✓ ·
+abonnement actif avec `ends_at` non nul créé ✓ · **seconde validation refusée**
+(« pas en attente de validation ») ✓ · nettoyage : 0 ligne restante, les 3 agences
+réelles inchangées ✓.
+
+### Front
+- `src/lib/pending-api.ts` : `usePendingState`, `useSelectPendingPlan`,
+  `usePendingAgencies`, `useActivatePendingAgency`, `useRejectPendingAgency`,
+  `pendingDeclarationLabel`, `pendingErrorLabel` (affiche **le code technique**).
+- `src/pages/pending.tsx` — **écran d'attente** : statut, offre choisie, montant à
+  régler, instructions Orange Money / Wave, **comparatif des 3 offres** avec
+  changement d'offre, motif de refus, dernière déclaration, formulaire de
+  déclaration de paiement (**réutilise `PaymentSection`, donc
+  `submit_payment_declaration` : aucun doublon**), emplacement **réservé au
+  contrat** (non construit), déconnexion.
+- `src/App.tsx` — `WorkspaceGate` : `if (activeAgency?.status === 'pending') return
+  <PendingValidationPage />`, rendu **hors AppShell** donc sans aucune navigation
+  vers les modules. Le dashboard est bien fermé tant que ce n'est pas validé.
+- `src/pages/admin/pending.tsx` — file admin `/admin/validations` : recherche,
+  offre choisie, montant dû, paiement déclaré (montant, moyen, référence, date,
+  statut), dernier motif, **Valider et ouvrir le dashboard**, **Refuser avec
+  motif** (motif obligatoire, affiché à l'agence). Pastille de compteur dans la
+  navigation admin.
+- `src/pages/onboarding.tsx` — **nouvelle étape « Votre offre »** (comparatif des
+  3 offres, choix avant création) insérée entre « Présentation » et « Confirmation ».
+  Après création, `agency_select_pending_plan` enregistre le choix ; un échec n'est
+  pas bloquant (l'écran d'attente permet de rechoisir). Emplacement **réservé au
+  contrat** signalé dans cette étape.
+- `src/lib/plan-limits.ts` — `useAllPlans` + `PlanRow` deviennent la **source
+  unique** du catalogue et sélectionnent désormais `setup_fee` (le doublon local de
+  `my-offer.tsx` ne le sélectionnait pas, donc le montant dû était incalculable).
+
+### Fichiers
+`db/migrations/2026-10-21_session2_bloc2_abonnement.sql` ↔
+`db/rollback/2026-10-21_session2_bloc2_abonnement.sql` · `src/lib/pending-api.ts` ·
+`src/pages/pending.tsx` · `src/pages/admin/pending.tsx` · `src/App.tsx` ·
+`src/pages/onboarding.tsx` · `src/pages/admin/admin-shell.tsx` ·
+`src/lib/plan-limits.ts` · `src/pages/my-offer.tsx` · `src/index.css`
+
+`pnpm run typecheck` OK · `pnpm run build` OK · parenthèses des segments
+`$function$` validées par script.
+
+### Non testé sans navigateur
+Le parcours réel inscription → onboarding → écran d'attente → validation admin →
+ouverture du dashboard. La logique base est testée (§ ci-dessus), l'enchaînement
+d'écrans ne l'est pas.

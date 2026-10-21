@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
-import { ArrowLeft, ArrowRight, Building2, CheckCircle2, ImagePlus, MapPin, Phone, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Building2, CheckCircle2, ImagePlus, MapPin, Phone, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { BackButton } from '@/components/back-button';
+import { useAllPlans, type PlanRow } from '@/lib/plan-limits';
+import { useSelectPendingPlan } from '@/lib/pending-api';
+import { cash } from '@/lib/workspace-ui';
+
+/** Libellés français des modules, identiques à la page Mon offre. */
+const MODULE_LABELS: Record<string, string> = {
+  biens: 'Biens immobiliers', contacts: 'Prospects et contacts',
+  pipeline: 'Pipeline commercial', visites: 'Visites', whatsapp: 'WhatsApp',
+  automatisations: 'Automatisations', assistant_ia: 'Assistant IA',
+  ca_filters: 'CA avec filtres', ca_export_csv: 'Export CSV du CA',
+  stats: 'Statistiques avancées', rapports: 'Rapports mensuels',
+  support: 'Support prioritaire',
+};
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -32,6 +45,10 @@ const STEPS = [
   { key: 'identity', title: 'Votre agence', subtitle: 'Nom et raison sociale', icon: Building2 },
   { key: 'contact', title: 'Coordonnées', subtitle: 'Téléphone, adresse, ville', icon: Phone },
   { key: 'branding', title: 'Présentation', subtitle: 'Logo et description', icon: ImagePlus },
+  // BLOC 2 (session 2) : choix de l'offre AVANT la creation. L'agence est creee
+  // 'pending' et sans abonnement : c'est ce choix qui est enregistre dans
+  // agencies.pending_plan_id, puis soumis a validation par l'administrateur.
+  { key: 'plan', title: 'Votre offre', subtitle: 'Comparatif des 3 offres', icon: Sparkles },
   { key: 'review', title: 'Confirmation', subtitle: 'Vérifiez puis créez', icon: CheckCircle2 },
 ];
 
@@ -39,6 +56,10 @@ export default function OnboardingPage() {
   const { user, loading } = useAuth();
   const { memberships, loading: agencyLoading } = useAgency();
   const createAgency = useCreateAgency();
+  // BLOC 2 (session 2) : offre choisie pendant l'inscription.
+  const plans = useAllPlans();
+  const selectPlan = useSelectPendingPlan();
+  const [chosenPlanId, setChosenPlanId] = useState<string | null>(null);
   const [, navigate] = useLocation();
   const [step, setStep] = useState(0);
   const [logo, setLogo] = useState<File | null>(null);
@@ -73,6 +94,7 @@ export default function OnboardingPage() {
       ['name'],
       ['city'],
       [],
+      [], // etape « Votre offre » : aucun champ du formulaire, choix dans plans
       [],
     ];
     const fields = fieldsByStep[step];
@@ -89,7 +111,7 @@ export default function OnboardingPage() {
   const submit = async (values: OnboardingValues) => {
     setFormError('');
     try {
-      await createAgency.mutateAsync({
+      const result = await createAgency.mutateAsync({
         name: values.name,
         legal_name: values.legal_name || null,
         phone: values.phone || null,
@@ -99,6 +121,19 @@ export default function OnboardingPage() {
         description: values.description || null,
         logo,
       });
+      // BLOC 2 : l'agence est creee 'pending'. On enregistre aussitot l'offre
+      // choisie. Un echec ici n'est pas bloquant : l'ecran d'attente permet de
+      // re choisir l'offre, et l'administrateur voit le dossier de toute facon.
+      const created = result as unknown as { id?: string };
+      if (chosenPlanId && created?.id) {
+        try {
+          await selectPlan.mutateAsync(chosenPlanId);
+        } catch (planError) {
+          console.warn('offre_choisie_non_enregistree', planError);
+        }
+      }
+      // /dashboard est intercepte par WorkspaceGate : une agence 'pending' voit
+      // l'ecran d'attente de validation, pas le tableau de bord.
       navigate('/dashboard');
     } catch (error) {
       const message = getSupabaseErrorMessage(error, 'créer l’agence');
@@ -241,7 +276,68 @@ export default function OnboardingPage() {
                 </div>
               )}
 
+              {/* BLOC 2 (session 2) : comparatif des 3 offres. */}
               {step === 3 && (
+                <section className="onboarding-plan-step" data-testid="step-choose-plan">
+                  <header className="onboarding-step-head">
+                    <h2>Choisissez votre offre</h2>
+                    <p>
+                      Votre agence sera créée <strong>en attente de validation</strong> :
+                      aucun abonnement n’est actif tant que l’administrateur n’a pas
+                      validé votre paiement. Vous pourrez changer d’offre jusque-là.
+                    </p>
+                  </header>
+                  {plans.isLoading ? (
+                    <p className="form-hint">Chargement des offres…</p>
+                  ) : plans.error ? (
+                    <p className="form-feedback is-error" role="alert">
+                      Impossible de charger les offres. Vous pourrez choisir votre
+                      offre à l’étape suivante.
+                    </p>
+                  ) : (
+                    <div className="plan-grid" role="radiogroup" aria-label="Offres disponibles">
+                      {(plans.data ?? []).map((plan) => {
+                        const isChosen = chosenPlanId === plan.id;
+                        const total = Number(plan.setup_fee ?? 0) + Number(plan.price_monthly);
+                        return (
+                          <button
+                            type="button"
+                            key={plan.id}
+                            role="radio"
+                            aria-checked={isChosen}
+                            className={`plan-card is-selectable${isChosen ? ' is-chosen' : ''}`}
+                            onClick={() => setChosenPlanId(plan.id)}
+                            data-testid={`button-onboarding-plan-${plan.name}`}
+                          >
+                            <header>
+                              <strong>{plan.display_name ?? plan.name}</strong>
+                              {isChosen && <span className="status-tag">Choisie</span>}
+                            </header>
+                            <p className="plan-price">
+                              {cash(Number(plan.price_monthly), plan.currency)}
+                              <small> / mois</small>
+                            </p>
+                            <p className="plan-setup">
+                              Installation {cash(Number(plan.setup_fee ?? 0), plan.currency)} ·{' '}
+                              <strong>à régler {cash(total, plan.currency)}</strong>
+                            </p>
+                            <ul className="plan-features">
+                              {(plan.modules ?? []).slice(0, 8).map((mod: string) => (
+                                <li key={mod}><CheckCircle2 size={12} /> {MODULE_LABELS[mod] ?? mod.replace(/_/g, ' ')}</li>
+                              ))}
+                            </ul>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="form-hint" data-testid="hint-onboarding-contract">
+                    Le contrat d’abonnement sera présenté pour signature dans une
+                    prochaine étape. Emplacement réservé, rien à faire pour l’instant.
+                  </p>
+                </section>
+              )}
+              {step === 4 && (
                 <div className="onboarding-step">
                   <span className="form-kicker">Étape 4 sur 4</span>
                   <h1>Prêt à créer votre espace ?</h1>

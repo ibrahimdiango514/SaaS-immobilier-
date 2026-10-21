@@ -13,7 +13,10 @@ import { PaymentSection } from '@/components/payment-panel';
 // BLOC 7 : jauge « Utilisation IA ce mois » (lecture seule, quotas de l'offre).
 import { useAgencyAiUsage, compactNumber } from '@/lib/usage-api';
 // BLOC 11 (bug 4) : suivi des demandes de changement d'offre cote agence.
-import { usePlanChangeRequests, planChangeStatusLabel } from '@/lib/plan-limits';
+import {
+  usePlanChangeRequests, planChangeStatusLabel, useAllPlans,
+  type PlanRow as SharedPlanRow,
+} from '@/lib/plan-limits';
 import { UsageGauge, WhatsAppBadge } from '@/components/usage-gauge';
 import { whatsappStatusLabel } from '@/lib/usage-api';
 import { useAgency } from '@/lib/agency-context';
@@ -55,14 +58,10 @@ interface UsageSnapshot {
   photos_per_property_limit: number;
 }
 
-interface PlanRow {
-  id: string;
-  name: string;
-  display_name: string;
-  price_monthly: number;
-  currency: string;
-  modules: string[];
-}
+// BLOC 2 : `PlanRow` et `useAllPlans` viennent de lib/plan-limits.ts (source
+// unique). Le doublon local ne sélectionnait pas `setup_fee`, indispensable au
+// calcul du montant dû (installation + premier mois) sur l'écran d'attente.
+type PlanRow = SharedPlanRow;
 
 const MODULE_LABELS: Record<string, string> = {
   biens: 'Biens immobiliers',
@@ -95,21 +94,7 @@ function useUsageSnapshot(agencyId?: string) {
   });
 }
 
-function useAllPlans() {
-  return useQuery({
-    queryKey: ['offre', 'plans'],
-    queryFn: async (): Promise<PlanRow[]> => {
-      const { data, error } = await (db() as unknown as {
-        from: (t: string) => { select: (c: string) => { order: (c: string, o: { ascending: boolean }) => Promise<{ data: unknown; error: unknown }> } };
-      })
-        .from('plans')
-        .select('id, name, display_name, price_monthly, currency, modules')
-        .order('price_monthly', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as PlanRow[];
-    },
-  });
-}
+
 
 function useRequestPlanChange(agencyId?: string) {
   const queryClient = useQueryClient();

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'wouter';
 import {
   Activity,
   ArrowLeft,
+  BadgeCheck,
   ArrowRight,
   BarChart3,
   Bell,
@@ -29,6 +30,7 @@ import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { BackButton } from '@/components/back-button';
 import { trackRoute } from '@/lib/back-navigation';
 import { useAgency } from '@/lib/agency-context';
+import { usePendingAgencies } from '@/lib/pending-api';
 import { BrandMark } from '@/lib/workspace-ui';
 import { ThemeToggle } from '@/lib/theme';
 
@@ -38,7 +40,7 @@ type AdminNavItem = {
   icon: ComponentType<{ size?: number | string }>;
   exact?: boolean;
   /** Clé du compteur affiché en pastille, calculé depuis la base. */
-  badge?: 'pendingBilling';
+  badge?: 'pendingBilling' | 'pendingAgencies';
 };
 
 const adminNav: AdminNavItem[] = [
@@ -46,6 +48,9 @@ const adminNav: AdminNavItem[] = [
   { href: '/admin/agences', label: 'Agences', icon: Building2 },
   { href: '/admin/biens', label: 'Biens & contenus', icon: Home },
   { href: '/admin/abonnements', label: 'Abonnements', icon: CreditCard },
+  // BLOC 2 (session 2) : agences créées mais non validées — offre choisie et
+  // paiement déclaré. La validation crée l'abonnement et ouvre leur dashboard.
+  { href: '/admin/validations', label: 'Validations d’agences', icon: BadgeCheck, badge: 'pendingAgencies' },
   // BLOC 2 : file de validation des paiements et demandes de changement d'offre.
   { href: '/admin/paiements', label: 'Paiements & offres', icon: Wallet, badge: 'pendingBilling' },
   { href: '/admin/ca', label: 'Chiffre d’affaires', icon: TrendingUp },
@@ -143,7 +148,12 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   // d'ou un bouton visible mais sans AUCUN effet. On le masque dans ce cas.
   const { memberships } = useAgency();
   const hasAgencySpace = memberships.length > 0;
-  const badges: Record<string, number> = { pendingBilling };
+  // BLOC 2 (session 2) : pastille « Validations d'agences ».
+  const pendingAgenciesQ = usePendingAgencies();
+  const badges: Record<string, number> = {
+    pendingBilling,
+    pendingAgencies: Number(pendingAgenciesQ.data?.total ?? 0),
+  };
   // BLOC 9 : journal des routes internes.
   useEffect(() => { trackRoute(path); }, [path]);
 
