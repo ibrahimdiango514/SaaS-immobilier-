@@ -34,6 +34,19 @@ export interface CreatedInvitation {
   warning?: string;
 }
 
+/** BLOC 5 : résultat d'une réinitialisation de mot de passe par owner/admin. */
+export interface ResetPasswordResult {
+  membership_id: string;
+  agency_id: string;
+  agency_name: string;
+  target_user_id: string;
+  target_email: string | null;
+  target_full_name: string | null;
+  target_role: string;
+  temp_password: string;
+  must_change_password: boolean;
+}
+
 export interface RedeemedInvitation {
   agency_name: string;
   role: string;
@@ -57,6 +70,15 @@ const errorLabels: Record<string, string> = {
   invitation_invalid_or_no_longer_valid:
     'Ce lien d’invitation n’est pas valide ou n’est plus utilisable. Demandez un nouveau lien.',
   auth_user_creation_failed: 'La création du compte a échoué. Réessayez.',
+  membership_not_found: 'Ce membre est introuvable dans votre agence.',
+  target_account_not_found: 'Le compte de ce membre est introuvable.',
+  owner_password_cannot_be_reset:
+    'Le mot de passe du propriétaire ne peut pas être réinitialisé ici.',
+  cannot_reset_own_password:
+    'Vous ne pouvez pas réinitialiser votre propre mot de passe ici — utilisez la page Profil.',
+  password_reset_failed: 'La réinitialisation du mot de passe a échoué. Réessayez.',
+  invalid_identifier: 'Identifiant invalide. Rechargez la page puis réessayez.',
+  membership_id_or_agency_and_target_are_required: 'Aucun membre n’a été indiqué.',
   account_creation_failed: 'La création du compte a échoué. Réessayez.',
   invitation_redeem_failed: 'L’activation de l’invitation a échoué. Réessayez.',
   agency_member_provisioning_failed: 'Le rattachement à l’agence a échoué. Réessayez.',
@@ -149,5 +171,17 @@ export function redeemAgencyInvitation(input: {
     email: input.email,
     full_name: input.fullName,
     password: input.password,
+  });
+}
+
+/**
+ * BLOC 5 — Réinitialise le mot de passe d'un membre (owner/admin uniquement).
+ * Le mot de passe est généré côté serveur et n'est renvoyé qu'une seule fois.
+ */
+export function resetAgentPassword(input: { membershipId?: string; agencyId?: string; targetUserId?: string }) {
+  return invoke<ResetPasswordResult>('reset-agent-password', {
+    membership_id: input.membershipId,
+    agency_id: input.agencyId,
+    target_user_id: input.targetUserId,
   });
 }

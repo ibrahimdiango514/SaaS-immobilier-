@@ -244,3 +244,35 @@ Autres écritures en base :
 - Onboarding aligné sur les mêmes règles (avant : SVG accepté, 3 Mo).
 - `pnpm run typecheck` OK · `pnpm run build` OK. Aucune migration nécessaire
   (`agencies.logo_url` et le bucket `agency-assets` existent déjà).
+
+## BLOC 5 — RÉINITIALISATION DU MOT DE PASSE D'UN MEMBRE : FAIT ET DÉPLOYÉ
+
+- **Edge Function `reset-agent-password` DÉPLOYÉE** (projet `xbuuhfwobrafcbgtdgjx`,
+  version 1, `verify_jwt = true`, id `fee21315-0f35-4d23-b996-fe54c208508f`).
+  Source : `supabase/functions/reset-agent-password/index.ts`.
+- Garde-fous côté serveur (rien n'est cru depuis le corps de requête) :
+  1. appelant authentifié via son JWT ;
+  2. membership cible **résolu par le serveur** (`agency_members`) → l'agence est
+     déduite de la cible, donc même agence par construction ;
+  3. appelant owner/admin de l'agence de la cible (`public.has_agency_role`,
+     avec repli sur lecture directe si la résolution RPC échoue — jamais si elle
+     renvoie `false`) ;
+  4. **la cible ne doit pas être le propriétaire** (`owner_password_cannot_be_reset`) ;
+  5. la cible ne doit pas être l'appelant (`cannot_reset_own_password`) ;
+  6. agence non suspendue (`agency_suspended`).
+- Mot de passe **généré côté serveur** : 14 caractères, alphabet sans caractères
+  ambigus (0/O, 1/l/I), composition garantie (≥1 majuscule, ≥1 minuscule, ≥1 chiffre),
+  `crypto.getRandomValues`. Renvoyé **une seule fois** dans la réponse.
+- `must_change_password = true` posé **dans `auth.user_metadata` ET dans
+  `saas_immobilier.user_profiles`** (c'est ce dernier que lit le verrou `WorkspaceGate`).
+- Traçabilité : entrée `activity_log` (action `updated`, entité `agency_members`)
+  avec e-mail cible, rôle, `reset_by` = id de l'appelant. Un échec de journalisation
+  ne fait jamais échouer l'opération.
+- Front : `resetAgentPassword()` dans `lib/agency-team-api.ts` (+ 8 nouveaux libellés
+  d'erreur en français) ; bouton « Réinitialiser le mot de passe » (icône `RotateCcw`)
+  sur chaque ligne de membre **sauf le propriétaire et soi-même** (page Équipe),
+  panneau de confirmation expliquant les conséquences, puis encart « Nouveau mot de
+  passe à transmettre » avec copie et avertissement d'affichage unique.
+- `pnpm run typecheck` OK · `pnpm run build` OK. Aucune migration nécessaire.
+- ⚠️ Non testable depuis le sandbox (pas d'accès réseau à `*.supabase.co`) :
+  le test réel se fait depuis le navigateur — voir la liste de tests manuels.

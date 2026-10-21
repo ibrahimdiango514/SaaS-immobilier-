@@ -5,8 +5,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Check, Copy, KeyRound, Link2, LockKeyhole, MessageCircle, ShieldCheck,
-  UserPlus, UserRound, UserX, UsersRound,
+  Check, Copy, KeyRound, Link2, LockKeyhole, MessageCircle, RotateCcw, ShieldCheck,
+  UserPlus, UserRound, UserX, UsersRound, X,
 } from 'lucide-react';
 import {
   ButtonPrimary, ErrorState, Heading, LoadingRows, roleNames, useSafeRetry,
@@ -14,8 +14,8 @@ import {
 import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 import {
-  createAgencyInvitation, createAgencyMember, fetchSeatInfo, teamErrorLabel,
-  type CreatedInvitation, type SeatInfo, type TeamRole,
+  createAgencyInvitation, createAgencyMember, fetchSeatInfo, resetAgentPassword,
+  teamErrorLabel, type CreatedInvitation, type SeatInfo, type TeamRole,
 } from '@/lib/agency-team-api';
 
 interface TeamMember {
@@ -153,6 +153,10 @@ export default function TeamPage() {
   const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null);
   const [invitation, setInvitation] = useState<CreatedInvitation | null>(null);
   const [invitingRole, setInvitingRole] = useState<TeamRole>('agent');
+  // BLOC 5 : réinitialisation du mot de passe d'un membre.
+  const [resetTarget, setResetTarget] = useState<TeamMember | null>(null);
+  const [resetResult, setResetResult] = useState<{ name: string; email: string; tempPassword: string } | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
 
   const seatInfo = seats.data as SeatInfo | undefined;
   const activeCount = (roster.data ?? []).filter((member) => member.status === 'active').length;
@@ -214,6 +218,31 @@ export default function TeamPage() {
       setMessage(next === 'inactive' ? 'Accès désactivé : la place est libérée.' : 'Accès réactivé.');
     } catch (error) {
       setMessage(getSupabaseErrorMessage(error, 'modifier cet accès'));
+    }
+  };
+
+  // BLOC 5 : le mot de passe est généré côté serveur (Edge Function
+  // `reset-agent-password`) et n'est affiché qu'une seule fois.
+  const confirmResetPassword = async () => {
+    if (!resetTarget || resetBusy) return;
+    setResetBusy(true);
+    setMessage('');
+    setResetResult(null);
+    try {
+      const result = await resetAgentPassword({ membershipId: resetTarget.id });
+      setResetResult({
+        name: result.target_full_name ?? resetTarget.full_name ?? 'ce membre',
+        email: result.target_email ?? resetTarget.email ?? '',
+        tempPassword: result.temp_password,
+      });
+      setResetTarget(null);
+      setMessage('Mot de passe réinitialisé. Transmettez-le : il ne sera plus affiché.');
+      await refresh();
+    } catch (error) {
+      setMessage(teamErrorLabel(error));
+      setResetTarget(null);
+    } finally {
+      setResetBusy(false);
     }
   };
 
@@ -377,6 +406,21 @@ export default function TeamPage() {
                     </div>
                     <span className="member-role">{roleNames[member.role] ?? member.role}</span>
                     <span className={`membership-status membership-${member.status}`}>{member.status === 'active' ? 'Actif' : 'Désactivé'}</span>
+                    {/* BLOC 5 : réinitialisation du mot de passe — jamais sur le
+                        propriétaire, jamais sur soi-même. */}
+                    {!isOwner && (
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => { setResetResult(null); setResetTarget(member); }}
+                        disabled={resetBusy || isSelf}
+                        title={isSelf ? 'Utilisez la page Profil pour changer votre propre mot de passe' : `Réinitialiser le mot de passe de ${member.full_name ?? 'ce membre'}`}
+                        aria-label={`Réinitialiser le mot de passe de ${member.full_name ?? 'ce membre'}`}
+                        data-testid={`button-reset-password-${member.id}`}
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                    )}
                     {isOwner ? (
                       <span className="owner-lock" title="Le propriétaire ne peut pas être désactivé"><LockKeyhole size={13} /></span>
                     ) : (
@@ -404,6 +448,41 @@ export default function TeamPage() {
           )}
         </section>
       </div>
+
+      {resetTarget && (
+        <div className="reveal-box reset-confirm" role="dialog" aria-modal="false" aria-label="Confirmer la réinitialisation du mot de passe" data-testid="box-reset-confirm">
+          <div className="reveal-head"><RotateCcw size={15} /><strong>Réinitialiser le mot de passe ?</strong></div>
+          <p className="privacy-note-text">
+            Un nouveau mot de passe sera généré pour{' '}
+            <strong>{resetTarget.full_name || resetTarget.email || 'ce membre'}</strong>.
+            L’accès actuel cessera de fonctionner et la personne devra changer ce mot de
+            passe à sa première connexion. Cette action est enregistrée dans le journal d’activité.
+          </p>
+          <div className="form-actions">
+            <button type="button" className="button-link" onClick={() => setResetTarget(null)} disabled={resetBusy} data-testid="button-reset-cancel">
+              <X size={14} /> Annuler
+            </button>
+            <ButtonPrimary testId="button-reset-confirm" onClick={() => void confirmResetPassword()} disabled={resetBusy}>
+              <KeyRound size={14} /> {resetBusy ? 'Réinitialisation…' : 'Confirmer'}
+            </ButtonPrimary>
+          </div>
+        </div>
+      )}
+
+      {resetResult && (
+        <div className="reveal-box" data-testid="box-reset-password">
+          <div className="reveal-head"><KeyRound size={15} /><strong>Nouveau mot de passe à transmettre</strong></div>
+          <CopyField label="Membre" value={resetResult.name} testId="text-reset-member" />
+          {resetResult.email && <CopyField label="Adresse e-mail" value={resetResult.email} testId="text-reset-email" />}
+          <CopyField label="Mot de passe temporaire" value={resetResult.tempPassword} testId="text-reset-temp-password" />
+          <p className="privacy-note-text">
+            Ce mot de passe ne sera plus affiché. La personne devra le changer à sa première connexion.
+          </p>
+          <button type="button" className="button-link" onClick={() => setResetResult(null)} data-testid="button-reset-dismiss">
+            <Check size={14} /> J’ai transmis le mot de passe
+          </button>
+        </div>
+      )}
 
       {message && (
         <p className={message.includes('échoué') || message.includes('atteinte') || message.includes('réservée') || message.includes('incorrect') ? 'form-error' : 'form-feedback'} role="status" data-testid="status-team-message">

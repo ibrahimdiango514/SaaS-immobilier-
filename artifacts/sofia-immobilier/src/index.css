@@ -3191,3 +3191,15 @@ input, .form-select, textarea {
   .logo-preview { width: 100%; justify-content: center; }
   .logo-actions { min-width: 0; width: 100%; }
 }
+
+/* =============================================================================
+   BLOC 5 — RÉINITIALISATION DU MOT DE PASSE D'UN MEMBRE
+   ============================================================================= */
+.reset-confirm { border-color: var(--si-border-gold); background: var(--si-bg-warm); }
+.reset-confirm .form-actions { margin-top: 12px; }
+.roster-row .icon-button + .icon-button { margin-left: 4px; }
+
+@media (max-width: 640px) {
+  .roster-row { flex-wrap: wrap; }
+  .roster-row .icon-button { min-width: 44px; min-height: 44px; }
+}
