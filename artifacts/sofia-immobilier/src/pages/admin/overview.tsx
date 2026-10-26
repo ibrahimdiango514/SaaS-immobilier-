@@ -38,9 +38,13 @@ import {
   useAllContacts,
   useAllMediaRefs,
   useActivityLog,
-  useRecordSubscriptionPayment,
 } from '@/lib/data-hooks';
-import { useSubscriptionRevenue, usePlatformRevenueReport } from '@/lib/admin-billing-api';
+import {
+  useSubscriptionRevenue,
+  usePlatformRevenueReport,
+  useAdminValidatePayment,
+  useAdminChangePlanJournaled,
+} from '@/lib/admin-billing-api';
 import { Button } from '@/components/ui/button';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
@@ -486,14 +490,38 @@ export default function AdminOverviewPage() {
 }
 
 
-type RevenueTooltipRow = {
-  encaisse: number;
-  revenu: number | null;
-  paiements: number;
-  agences: number;
+const EVENT_LABELS: Record<string, string> = {
+  activation: 'Activation',
+  plan_change: 'Changement d’offre',
+  suspension: 'Suspension',
+  reactivation: 'Réactivation',
+  payment_validated: 'Paiement validé',
+  payment_reclassified: 'Paiement reclassé',
 };
 
-/** Infobulle du graphique : montant par offre, paiements et agences du mois. */
+function operationLabel(row: { event_type: string; mensualite_variation: number | null; plan_from_name: string | null }): string {
+  if (row.event_type === 'plan_change') {
+    const variation = row.mensualite_variation ?? 0;
+    if (variation > 0) return 'Montée d’offre';
+    if (variation < 0) return 'Baisse d’offre';
+    return 'Changement d’offre';
+  }
+  return EVENT_LABELS[row.event_type] ?? row.event_type;
+}
+
+function operationTone(label: string): string {
+  if (label.startsWith('Baisse') || label === 'Suspension') return 'status-unavailable';
+  if (label.startsWith('Activation') || label.startsWith('Montée') || label === 'Réactivation') return 'status-available';
+  return 'status-reserved';
+}
+
+type RevenueTooltipRow = {
+  mensualite: number | null;
+  encaisse: number;
+  paiements: number;
+};
+
+/** Infobulle du graphique : mensualité par offre et encaissé du mois. */
 function RevenueTooltip({
   active,
   label,
@@ -525,9 +553,12 @@ function RevenueTooltip({
           ))}
         </ul>
       ) : null}
+      <p>
+        Mensualité :{' '}
+        <strong>{row?.mensualite === null || row?.mensualite === undefined ? 'non conservée' : cash(Number(row.mensualite), 'XOF')}</strong>
+      </p>
       <p>Encaissé : <strong>{cash(Number(row?.encaisse ?? 0), 'XOF')}</strong></p>
-      <p>Revenu du mois : <strong>{row?.revenu === null || row?.revenu === undefined ? 'non connu' : cash(Number(row.revenu), 'XOF')}</strong></p>
-      <p>{row?.paiements ?? 0} paiement(s) · {row?.agences ?? 0} agence(s)</p>
+      <p>{row?.paiements ?? 0} paiement(s) validé(s)</p>
     </div>
   );
 }
@@ -542,17 +573,11 @@ const subscriptionStatusLabel: SubscriptionStatusLabel = {
 };
 
 function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typeof useAllAgencies> }) {
-  // BLOC 2 (5) : le graphique est branché sur public.platform_subscription_revenue,
-  // c'est-à-dire sur les VRAIS plans (plans.display_name, sort_order) et sur les
-  // paiements VALIDÉS (subscription_payments n'est alimenté que par
-  // review_payment_declaration ou par l'enregistrement admin). Plus aucun
-  // recalcul côté navigateur.
+  // Source unique : public.platform_revenue_report. Le navigateur n'agrège rien.
   const [months, setMonths] = useState<6 | 12>(12);
-  // Session 4 : source unique du graphique et des KPI. platform_revenue_report
-  // expose deux séries nommées distinctement (encaisse / revenu) et le journal
-  // des opérations. Le navigateur ne calcule aucun agrégat.
   const reportQ = usePlatformRevenueReport(months);
-  const recordPayment = useRecordSubscriptionPayment();
+  const validatePayment = useAdminValidatePayment();
+  const changePlan = useAdminChangePlanJournaled();
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
 
@@ -567,7 +592,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
 
   const report = reportQ.data;
   const totals = report?.totals;
-  const ledger = report?.ledger ?? [];
+  const journal = report?.journal ?? [];
 
   const planMeta = useMemo(
     () =>
@@ -581,19 +606,16 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     [report?.by_plan],
   );
 
-  // Une entrée par mois : le total encaissé, une clé par offre pour les barres
-  // empilées, et le revenu d'abonnement quand la base le connaît.
   const chartData = useMemo(
     () =>
       (report?.months ?? []).map((month) => ({
         key: month.month_start,
         label: monthShortLabel(month.month_start),
+        mensualite: month.mensualite_total === null ? null : Number(month.mensualite_total),
         encaisse: Number(month.encaisse ?? 0),
-        revenu: month.revenu_mois === null ? null : Number(month.revenu_mois),
         paiements: Number(month.payments_count ?? 0),
-        agences: Number(month.agencies_count ?? 0),
         ...Object.fromEntries(
-          Object.entries(month.by_plan ?? {}).map(([code, amount]) => [`plan_${code}`, Number(amount)]),
+          Object.entries(month.mensualite_par_offre ?? {}).map(([code, amount]) => [`plan_${code}`, Number(amount)]),
         ),
       })),
     [report?.months],
@@ -602,7 +624,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
   const planCodes = useMemo(() => {
     const codes = new Set<string>();
     (report?.months ?? []).forEach((month) =>
-      Object.keys(month.by_plan ?? {}).forEach((code) => codes.add(code)),
+      Object.keys(month.mensualite_par_offre ?? {}).forEach((code) => codes.add(code)),
     );
     return [...codes];
   }, [report?.months]);
@@ -610,27 +632,77 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
   const planLabel = (code: string) => planMeta.find((plan) => plan.code === code)?.label ?? code;
   const planColor = (index: number) => `var(--si-chart-${(index % 5) + 1})`;
 
-  const encaisseMois = Number(totals?.encaisse_mois ?? 0);
-  const revenuMois = Number(totals?.revenu_mois ?? 0);
-  const sansPaiement = totals?.active_without_payment ?? [];
+  const mensualite = Number(totals?.mensualite_total ?? 0);
+  const encaisse = Number(totals?.encaisse ?? 0);
+  const facturesAttente = Number(totals?.factures_en_attente_montant ?? 0);
+  const nbFactures = Number(totals?.factures_en_attente_nombre ?? 0);
 
-  const handleRecord = (
-    agency: { id: string; name: string },
-    subscription: { id: string },
-    plan: { name: string; display_name: string | null; price_monthly: number; currency: string } | null,
-  ) => {
+  const exportJournal = () => {
+    downloadCsv(
+      `journal-abonnements-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Date', 'Agence', 'Type', 'Offre de départ', 'Offre d’arrivée', 'Variation mensualité', 'Montant facturé', 'Statut facture', 'Référence', 'Auteur'],
+      journal.map((row) => [
+        row.occurred_at,
+        row.agency_name,
+        operationLabel(row),
+        row.plan_from_name ?? '—',
+        row.plan_to_name ?? '—',
+        row.mensualite_variation ?? '',
+        row.invoice_amount ?? '',
+        row.invoice_status ?? '—',
+        row.reference ?? '',
+        row.actor_name ?? '',
+      ]),
+    );
+  };
+
+  const handleValidatePayment = (agency: { id: string; name: string }, planId: string | null, amount: number) => {
     setNotice('');
     setPageError('');
-    recordPayment.mutate(
+    validatePayment.mutate(
+      { agencyId: agency.id, planId, amount, note: 'Paiement validé par administrateur' },
       {
-        agencyId: agency.id,
-        subscriptionId: subscription.id,
-        amount: Number(plan?.price_monthly ?? 0),
-        planName: plan?.display_name ?? plan?.name,
+        onSuccess: () => setNotice(`Paiement de ${cash(amount, 'XOF')} validé pour ${agency.name}. L’encaissé est à jour.`),
+        onError: (error) => setPageError(getSupabaseErrorMessage(error, 'valider le paiement')),
       },
+    );
+  };
+
+  const handlePayInvoice = (invoiceId: string, agencyName: string, amount: number) => {
+    setNotice('');
+    setPageError('');
+    const invoice = report?.factures?.find((row) => row.id === invoiceId);
+    if (!invoice) return;
+    validatePayment.mutate(
+      { agencyId: invoice.agency_id, amount, invoiceId, note: `Règlement de la facture ${invoice.reference ?? invoiceId}` },
       {
-        onSuccess: () => setNotice(`Paiement enregistré pour ${agency.name} — abonnement prolongé de 30 jours.`),
-        onError: (error) => setPageError(getSupabaseErrorMessage(error, 'enregistrer le paiement')),
+        onSuccess: () => setNotice(`Facture de ${cash(amount, 'XOF')} réglée pour ${agencyName}. L’encaissé est à jour.`),
+        onError: (error) => setPageError(getSupabaseErrorMessage(error, 'régler la facture')),
+      },
+    );
+  };
+
+  const handleChangePlan = (agency: { id: string; name: string }, planId: string) => {
+    setNotice('');
+    setPageError('');
+    changePlan.mutate(
+      { agencyId: agency.id, planId },
+      {
+        onSuccess: (result) => {
+          if (!result.changed) {
+            setNotice(`Offre inchangée pour ${agency.name}.`);
+            return;
+          }
+          const variation = Number(result.mensualite_variation ?? 0);
+          const suffix =
+            Number(result.invoice_amount ?? 0) > 0
+              ? ` Facture en attente de ${cash(Number(result.invoice_amount), 'XOF')}.`
+              : ' Aucune facture : baisse d’offre.';
+          setNotice(
+            `${agency.name} : ${result.plan_from ?? ''} → ${result.plan_to ?? ''} (mensualité ${variation >= 0 ? '+' : ''}${cash(variation, 'XOF')}).${suffix}`,
+          );
+        },
+        onError: (error) => setPageError(getSupabaseErrorMessage(error, 'changer l’offre')),
       },
     );
   };
@@ -651,13 +723,15 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     );
   }
 
+  const facturesEnAttente = (report?.factures ?? []).filter((row) => row.status === 'pending');
+
   return (
     <section className="admin-grid abonnements-overview" aria-label="Abonnements">
       <article className="panel chart-panel">
         <div className="panel-head">
           <div>
-            <h2>Abonnements payants</h2>
-            <p>Revenus par mois et agences payantes — calculés en base sur les paiements validés</p>
+            <h2>Abonnements</h2>
+            <p>Mensualité, encaissé et factures — calculés en base, jamais dans le navigateur</p>
           </div>
           <div className="revenue-toolbar revenue-period-select" role="group" aria-label="Période des abonnements">
             {([6, 12] as const).map((value) => (
@@ -665,46 +739,39 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
             ))}
           </div>
         </div>
+
         <div className="revenue-kpis">
-          <article className="kpi-card" data-testid="kpi-abo-encaisse">
-            <span className="kpi-label">Encaissé ce mois</span>
-            <strong className="kpi-value">{cash(encaisseMois, 'XOF')}</strong>
-            <span className="kpi-foot">{totals?.paiements_mois ?? 0} paiement(s) ce mois · {cash(Number(totals?.encaisse_total ?? 0), 'XOF')} cumulés</span>
-          </article>
-          <article className="kpi-card" data-testid="kpi-abo-revenu-mois">
-            <span className="kpi-label">Revenu d’abonnement du mois</span>
-            <strong className="kpi-value">{cash(revenuMois, 'XOF')}</strong>
+          <article className="kpi-card" data-testid="kpi-abo-mensualite">
+            <span className="kpi-label">Mensualité du mois</span>
+            <strong className="kpi-value">{cash(mensualite, 'XOF')}</strong>
             <span className="kpi-foot">Somme des offres de {totals?.agences_actives ?? 0} agence(s) active(s)</span>
+          </article>
+          <article className="kpi-card" data-testid="kpi-abo-encaisse">
+            <span className="kpi-label">Encaissé</span>
+            <strong className="kpi-value">{cash(encaisse, 'XOF')}</strong>
+            <span className="kpi-foot">
+              {totals?.paiements_valides ?? 0} paiement(s) validé(s)
+              {Number(totals?.ecritures_contraires ?? 0) > 0
+                ? ` · ${cash(Number(totals?.ecritures_contraires), 'XOF')} annulés`
+                : ''}
+            </span>
+          </article>
+          <article className={`kpi-card${nbFactures > 0 ? ' kpi-card-alert' : ''}`} data-testid="kpi-abo-factures">
+            <span className="kpi-label">Factures en attente</span>
+            <strong className={`kpi-value${nbFactures > 0 ? ' kpi-value-alert' : ''}`}>{cash(facturesAttente, 'XOF')}</strong>
+            <span className="kpi-foot">{nbFactures} facture(s) à encaisser</span>
           </article>
           <article className="kpi-card" data-testid="kpi-abo-agences-actives">
             <span className="kpi-label">Agences actives</span>
             <strong className="kpi-value">{totals?.agences_actives ?? 0}</strong>
             <span className="kpi-foot">Abonnement en cours</span>
           </article>
-          <article className="kpi-card kpi-card-alert" data-testid="kpi-abo-sans-paiement">
-            <span className="kpi-label">Agences actives sans paiement</span>
-            <strong className="kpi-value kpi-value-alert">{sansPaiement.length}</strong>
-            <span className="kpi-foot">
-              {sansPaiement.length ? sansPaiement.map((row) => row.name).join(' · ') : 'Aucune anomalie'}
-            </span>
-          </article>
-          <article className="kpi-card" data-testid="kpi-abo-paiements">
-            <span className="kpi-label">Paiements enregistrés</span>
-            <strong className="kpi-value">{totals?.paiements_total ?? 0}</strong>
-            <span className="kpi-foot">Depuis le début</span>
-          </article>
         </div>
-        {(totals?.active_without_payment?.length ?? 0) > 0 ? (
-          <div className="notice-box notice-box-alert" role="status" data-testid="status-abo-sans-paiement">
-            <AlertTriangle size={14} />
-            <span>
-              {totals?.active_without_payment?.length} agence(s) active(s) sans aucun encaissement :
-              {' '}{totals?.active_without_payment?.map((row) => row.name).join(', ')}.
-              {' '}Le revenu affiché les compte, l’encaissé non.
-            </span>
-          </div>
-        ) : null}
-        {chartData.some((row) => row.encaisse > 0) ? (
+
+        {notice && <p className="form-feedback" role="status" data-testid="status-paiement-notice">{notice}</p>}
+        {pageError && <p className="form-error" role="alert" data-testid="status-paiement-error">{pageError}</p>}
+
+        {chartData.some((row) => row.encaisse > 0 || (row.mensualite ?? 0) > 0) ? (
           <div className="chart-box" data-testid="chart-abonnements">
             <ResponsiveContainer width="100%" height={264}>
               <ComposedChart data={chartData} margin={{ top: 22, right: 6, left: -8, bottom: 0 }}>
@@ -716,65 +783,128 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
                   <Bar
                     key={code}
                     yAxisId="left"
-                    dataKey={code === 'total' ? 'encaisse' : `plan_${code}`}
-                    stackId="encaisse"
-                    name={code === 'total' ? 'Encaissé' : planLabel(code)}
+                    dataKey={code === 'total' ? 'mensualite' : `plan_${code}`}
+                    stackId="mensualite"
+                    name={code === 'total' ? 'Mensualité' : planLabel(code)}
                     fill={planColor(index)}
                     radius={index === all.length - 1 ? [6, 6, 0, 0] : undefined}
                   >
                     {index === all.length - 1 ? (
-                      <LabelList dataKey="encaisse" position="top" formatter={(value: number) => compact(Number(value))} style={{ fontSize: 9.5, fontWeight: 700, fill: 'currentColor' }} />
+                      <LabelList dataKey="mensualite" position="top" formatter={(value: number) => compact(Number(value))} style={{ fontSize: 9.5, fontWeight: 700, fill: 'currentColor' }} />
                     ) : null}
                   </Bar>
                 ))}
-                <Line yAxisId="left" type="monotone" dataKey="revenu" stroke="var(--si-chart-4)" strokeWidth={2.4} dot={{ r: 3 }} name="Revenu du mois" connectNulls={false} />
+                <Line yAxisId="left" type="monotone" dataKey="encaisse" stroke="var(--si-chart-4)" strokeWidth={2.4} dot={{ r: 3 }} name="Encaissé" />
               </ComposedChart>
             </ResponsiveContainer>
             <p className="chart-caption">
-              Barres : encaissé par mois, empilé par offre. Courbe : revenu d’abonnement, connu pour le mois en cours
-              seulement. Les deux mesures ne se comparent pas terme à terme.
+              Barres empilées : mensualité par offre. La mensualité est une mesure instantanée : elle n’est
+              connue que pour le mois en cours, l’historique des offres n’étant pas conservé. Courbe : encaissé
+              réel de chaque mois. Les deux mesures ne se comparent pas terme à terme.
             </p>
           </div>
         ) : (
           <div className="empty-table" data-testid="empty-abonnements-chart">
             <div className="empty-table-mark"><TrendingUp size={17} /></div>
-            <strong>Aucun encaissement sur la période</strong>
-            <p>Les montants apparaissent dès la première validation de paiement ou activation facturée.</p>
-            <Link href="/admin/paiements" className="text-action">Ouvrir la file de validation <ArrowRight size={13} /></Link>
+            <strong>Aucune activité sur la période</strong>
+            <p>Les montants apparaissent dès la première activation ou le premier paiement validé.</p>
           </div>
         )}
+
+        {facturesEnAttente.length ? (
+          <>
+            <div className="panel-subhead">
+              <h3>Factures en attente</h3>
+              <p>Montant dû sur changement d’offre. Hors encaissé tant qu’un paiement n’est pas validé.</p>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table" data-testid="table-factures-attente">
+                <thead>
+                  <tr><th>Date</th><th>Agence</th><th>Offre</th><th>Montant</th><th>Prorata</th><th><span className="sr-only">Action</span></th></tr>
+                </thead>
+                <tbody>
+                  {facturesEnAttente.map((invoice) => (
+                    <tr key={invoice.id} data-testid={`row-facture-${invoice.id}`}>
+                      <td>{dateLabel(invoice.created_at)}</td>
+                      <td><strong>{invoice.agency_name}</strong></td>
+                      <td>{invoice.plan_from_name ?? '—'} → {invoice.plan_to_name ?? '—'}</td>
+                      <td>{cash(Number(invoice.amount), 'XOF')}</td>
+                      <td>
+                        {invoice.prorata_applied && invoice.prorata_days !== null
+                          ? `${invoice.prorata_days}/${invoice.prorata_days_in_month} jours`
+                          : 'mois entier'}
+                      </td>
+                      <td className="row-actions-cell">
+                        <button
+                          className="row-action"
+                          disabled={validatePayment.isPending}
+                          onClick={() => handlePayInvoice(invoice.id, invoice.agency_name, Number(invoice.amount))}
+                          data-testid={`button-regler-facture-${invoice.id}`}
+                        >
+                          Valider le paiement
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
+
         <div className="panel-subhead">
-          <h3>Journal des opérations</h3>
-          <p>Chaque activation, montée ou baisse d’offre et chaque paiement validé, avec son effet sur les deux indicateurs.</p>
+          <div className="panel-subhead-row">
+            <div>
+              <h3>Journal des opérations</h3>
+              <p>Activation, changement d’offre, suspension, réactivation et paiement validé.</p>
+            </div>
+            <button className="button-link" type="button" onClick={exportJournal} disabled={!journal.length} data-testid="button-export-journal">
+              <Download size={13} /> Exporter CSV
+            </button>
+          </div>
         </div>
-        {ledger.length ? (
+        {journal.length ? (
           <div className="table-wrap">
             <table className="data-table" data-testid="table-journal-operations">
               <thead>
-                <tr><th>Date</th><th>Agence</th><th>Opération</th><th>Offre</th><th>Encaissé</th><th>Impact revenu</th><th>Référence</th></tr>
+                <tr>
+                  <th>Date</th><th>Agence</th><th>Type</th><th>Offre de départ</th><th>Offre d’arrivée</th>
+                  <th>Variation mensualité</th><th>Montant facturé</th><th>Statut facture</th>
+                </tr>
               </thead>
               <tbody>
-                {ledger.map((row) => (
-                  <tr key={`${row.id}-${row.occurred_at}`} data-testid={`row-operation-${row.id}`}>
-                    <td>{dateLabel(row.occurred_at)}</td>
-                    <td><strong>{row.agency_name}</strong></td>
-                    <td><span className={`status-pill ${row.operation.startsWith('Baisse') ? 'status-unavailable' : row.operation.startsWith('Active') ? 'status-available' : 'status-reserved'}`}>{row.operation}</span></td>
-                    <td>{row.plan_name}</td>
-                    <td>{Number(row.encaisse) > 0 ? cash(Number(row.encaisse), 'XOF') : '—'}</td>
-                    <td>
-                      {row.impact_revenu === null
-                        ? '—'
-                        : <span className={Number(row.impact_revenu) < 0 ? 'amount-negative' : Number(row.impact_revenu) > 0 ? 'amount-positive' : ''}>{Number(row.impact_revenu) > 0 ? '+' : ''}{cash(Number(row.impact_revenu), 'XOF')}</span>}
-                    </td>
-                    <td>{row.reference ?? row.motif ?? '—'}</td>
-                  </tr>
-                ))}
+                {journal.map((row) => {
+                  const label = operationLabel(row);
+                  return (
+                    <tr key={row.id} data-testid={`row-operation-${row.id}`}>
+                      <td>{dateLabel(row.occurred_at)}</td>
+                      <td><strong>{row.agency_name}</strong></td>
+                      <td><span className={`status-pill ${operationTone(label)}`}>{label}</span></td>
+                      <td>{row.plan_from_name ?? '—'}</td>
+                      <td>{row.plan_to_name ?? '—'}</td>
+                      <td>
+                        {row.mensualite_variation === null
+                          ? '—'
+                          : <span className={row.mensualite_variation < 0 ? 'amount-negative' : row.mensualite_variation > 0 ? 'amount-positive' : ''}>
+                              {row.mensualite_variation > 0 ? '+' : ''}{cash(Number(row.mensualite_variation), 'XOF')}
+                            </span>}
+                      </td>
+                      <td>{row.invoice_amount ? cash(Number(row.invoice_amount), 'XOF') : '—'}</td>
+                      <td>
+                        {row.invoice_status === 'pending' ? <span className="status-pill status-reserved">En attente</span>
+                          : row.invoice_status === 'paid' ? <span className="status-pill status-available">Payée</span>
+                          : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         ) : (
           <div className="empty-table"><strong>Aucune opération sur la période</strong></div>
         )}
+
         {planMeta.length ? (
           <div className="plan-breakdown" data-testid="list-revenue-by-plan">
             {planMeta.map((plan) => (
@@ -797,20 +927,19 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         <div className="panel-head">
           <div>
             <h2>Agences et abonnements</h2>
-            <p>Statut d’abonnement de chaque agence — offre réelle appliquée</p>
+            <p>Offre réelle appliquée et actions de facturation</p>
           </div>
           <Link href="/admin/abonnements" className="text-action" data-testid="link-admin-manage-subscriptions">Gérer <ArrowRight size={13} /></Link>
         </div>
-        {notice && <p className="form-feedback" role="status" data-testid="status-paiement-notice">{notice}</p>}
-        {pageError && <p className="form-error" role="alert" data-testid="status-paiement-error">{pageError}</p>}
         {agencies.length ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Agence</th><th>Statut</th><th>Abonnement</th><th>Formule</th><th>Fin</th><th><span className="sr-only">Action</span></th></tr></thead>
+              <thead><tr><th>Agence</th><th>Statut</th><th>Abonnement</th><th>Formule</th><th>Fin</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {agencies.map((agency) => {
                   const sub = subByAgency.get(agency.id);
                   const plan = sub ? planById.get(sub.plan_id) ?? null : null;
+                  const otherPlan = plans.find((candidate) => candidate.id !== sub?.plan_id) ?? null;
                   return (
                     <tr key={agency.id} data-testid={`row-abo-agence-${agency.id}`}>
                       <td><strong>{agency.name}</strong><small>{agency.city ?? agency.country}</small></td>
@@ -820,7 +949,26 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
                       <td>{sub?.ends_at ? dateLabel(sub.ends_at) : sub?.trial_ends_at ? `Essai : ${dateLabel(sub.trial_ends_at)}` : '—'}</td>
                       <td className="row-actions-cell">
                         {sub ? (
-                          <button className="row-action" disabled={recordPayment.isPending} onClick={() => handleRecord(agency, sub, plan)} data-testid={`button-paiement-recu-${agency.id}`}>Paiement reçu</button>
+                          <div className="row-actions-inline">
+                            <button
+                              className="row-action"
+                              disabled={validatePayment.isPending || !plan}
+                              onClick={() => plan && handleValidatePayment(agency, plan.id, Number(plan.price_monthly))}
+                              data-testid={`button-paiement-valide-${agency.id}`}
+                            >
+                              Valider un paiement
+                            </button>
+                            {otherPlan ? (
+                              <button
+                                className="row-action"
+                                disabled={changePlan.isPending}
+                                onClick={() => handleChangePlan(agency, otherPlan.id)}
+                                data-testid={`button-changer-offre-${agency.id}`}
+                              >
+                                Passer en {otherPlan.display_name ?? otherPlan.name}
+                              </button>
+                            ) : null}
+                          </div>
                         ) : null}
                       </td>
                     </tr>

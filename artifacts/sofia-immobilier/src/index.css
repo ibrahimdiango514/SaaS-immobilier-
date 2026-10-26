@@ -4223,3 +4223,19 @@ button.row-action.danger-action { color: var(--si-danger); }
 [data-theme='dark'] .revenue-tooltip strong,
 [data-theme='dark'] .revenue-tooltip p strong { color: #e2e8f0; }
 [data-theme='dark'] .panel-subhead h3 { color: #e2e8f0; }
+
+/* ==========================================================================
+   Session 5 - mensualite, encaisse, factures, journal
+   ========================================================================== */
+.panel-subhead-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.panel-subhead-row .button-link { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.panel-subhead-row .button-link:disabled { opacity: .45; cursor: not-allowed; }
+.row-actions-inline { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.row-actions-inline .row-action { white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .panel-subhead-row { flex-direction: column; align-items: stretch; }
+  .row-actions-inline .row-action { width: 100%; }
+}
+
+[data-theme='dark'] .panel-subhead-row .button-link { color: #99f6e4; }

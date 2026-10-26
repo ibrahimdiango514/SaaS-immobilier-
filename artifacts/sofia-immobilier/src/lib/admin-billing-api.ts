@@ -122,53 +122,84 @@ export const getSubscriptionRevenueQueryKey = (months: number) =>
 /* ------------------------------------------------------------------ */
 /* Rapport comptable — source unique du graphique et des KPI           */
 /* ------------------------------------------------------------------ */
-// public.platform_revenue_report distingue deux notions qui ne doivent
+// public.platform_revenue_report distingue trois notions qui ne doivent
 // jamais être confondues :
-//   encaisse  = argent réellement reçu (table subscription_payments) ;
-//   revenu    = somme des prix des offres ACTIVES (ce que le parc rapporte),
-//               recalculé à chaque changement d'offre.
+//   mensualite = somme des prix des offres ACTIVES (revenu récurrent) ;
+//   encaisse   = paiements validés par un administrateur, net des écritures
+//                contraires ; une validation seule le fait monter ;
+//   factures   = montant dû par changement d'offre, hors encaissé.
 // Le front ne somme rien : il affiche ce que la base renvoie.
 export interface RevenueMonthRow {
   month_start: string;
+  /** null pour les mois passés : la mensualité n'a pas d'historique conservé. */
+  mensualite_total: number | null;
+  mensualite_par_offre: Record<string, number>;
   encaisse: number;
-  /** null pour les mois passés : non reconstituable sans historique d'offre. */
-  revenu_mois: number | null;
   payments_count: number;
-  agencies_count: number;
-  by_plan: Record<string, number>;
 }
 
-export interface RevenueLedgerRow {
+export type JournalEventType =
+  | 'activation'
+  | 'plan_change'
+  | 'suspension'
+  | 'reactivation'
+  | 'payment_validated'
+  | 'payment_reclassified';
+
+export interface JournalRow {
   id: string;
   occurred_at: string;
+  event_type: JournalEventType;
   agency_name: string;
-  operation: string;
-  plan_name: string;
-  encaisse: number;
-  impact_revenu: number | null;
+  agency_id: string;
+  plan_from_name: string | null;
+  plan_to_name: string | null;
+  mensualite_from: number | null;
+  mensualite_to: number | null;
+  mensualite_variation: number | null;
+  facture_amount: number | null;
   reference: string | null;
-  motif: string | null;
+  reason: string | null;
+  payment_id: string | null;
+  invoice_status: 'pending' | 'paid' | 'cancelled' | null;
+  invoice_amount: number | null;
+  prorata_applied: boolean | null;
+  actor_name: string | null;
+}
+
+export interface InvoiceRow {
+  id: string;
+  agency_id: string;
+  agency_name: string;
+  plan_from_name: string | null;
+  plan_to_name: string | null;
+  amount: number;
+  status: 'pending' | 'paid' | 'cancelled';
+  prorata_applied: boolean;
+  prorata_days: number | null;
+  prorata_days_in_month: number | null;
+  reference: string | null;
+  created_at: string;
+  paid_at: string | null;
 }
 
 export interface PlatformRevenueReport {
   months: RevenueMonthRow[];
-  ledger: RevenueLedgerRow[];
+  journal: JournalRow[];
+  factures: InvoiceRow[];
   totals: {
+    mensualite_total: number;
+    mensualite_par_offre: Record<string, number>;
+    encaisse: number;
     encaisse_mois: number;
-    encaisse_total: number;
-    revenu_mois: number;
-    paiements_mois: number;
-    paiements_total: number;
+    encaisse_brut: number;
+    ecritures_contraires: number;
+    paiements_valides: number;
+    factures_en_attente_montant: number;
+    factures_en_attente_nombre: number;
+    factures_payees_nombre: number;
     agences_actives: number;
-    active_without_payment: Array<{
-      id: string;
-      name: string;
-      plan_name: string;
-      price_monthly: number;
-      starts_at: string | null;
-      ends_at: string | null;
-    }>;
-    underpaid: Array<{ id: string; name: string; plan_name: string; price_monthly: number; paid_total: number }>;
+    active_without_payment: Array<{ id: string; name: string; plan_name: string; price_monthly: number }>;
   };
   by_plan: Array<{
     id: string;
@@ -192,6 +223,117 @@ export function usePlatformRevenueReport(months = 12) {
       if (error) throw error;
       return data as PlatformRevenueReport;
     },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Écritures — toutes côté base, avec invalidation immédiate du cache  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Valide un paiement. Seule voie d'augmentation de l'encaissé.
+ * Si `invoiceId` est fourni, la facture en attente passe à « payée ».
+ */
+export function useAdminValidatePayment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      agencyId: string;
+      planId?: string | null;
+      amount?: number | null;
+      paidOn?: string;
+      reference?: string | null;
+      note?: string | null;
+      invoiceId?: string | null;
+    }) => {
+      const { data, error } = await rpc().rpc('admin_validate_payment', {
+        p_agency_id: input.agencyId,
+        p_plan_id: input.planId ?? null,
+        p_amount: input.amount ?? null,
+        p_paid_on: input.paidOn ?? new Date().toISOString().slice(0, 10),
+        p_reference: input.reference ?? null,
+        p_note: input.note ?? null,
+        p_invoice_id: input.invoiceId ?? null,
+      });
+      if (error) throw error;
+      return data as { payment_id: string; amount: number; reference: string; invoice_id: string | null };
+    },
+    onSuccess: async () => invalidateBilling(queryClient),
+  });
+}
+
+/** Change l'offre : mensualité immédiate, facture en attente si montée, aucun encaissement. */
+export function useAdminChangePlanJournaled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { agencyId: string; planId: string; note?: string | null }) => {
+      const { data, error } = await rpc().rpc('admin_change_agency_plan_journaled', {
+        p_agency_id: input.agencyId,
+        p_plan_id: input.planId,
+        p_effective_on: new Date().toISOString().slice(0, 10),
+        p_note: input.note ?? null,
+        p_reason: null,
+      });
+      if (error) throw error;
+      return data as {
+        changed: boolean;
+        mensualite_variation?: number;
+        invoice_id?: string | null;
+        invoice_amount?: number;
+        plan_from?: string;
+        plan_to?: string;
+      };
+    },
+    onSuccess: async () => invalidateBilling(queryClient),
+  });
+}
+
+/** Active une agence : la mensualité monte, aucun encaissement n'est créé. */
+export function useAdminActivateAgencyJournaled() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { agencyId: string; planId?: string | null; note?: string | null }) => {
+      const { data, error } = await rpc().rpc('admin_activate_agency_journaled', {
+        p_agency_id: input.agencyId,
+        p_plan_id: input.planId ?? null,
+        p_note: input.note ?? null,
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => invalidateBilling(queryClient),
+  });
+}
+
+/** Suspend une agence : la mensualité baisse, rien n'est facturé ni remboursé. */
+export function useAdminSuspendAgency() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { agencyId: string; reason?: string | null }) => {
+      const { data, error } = await rpc().rpc('admin_suspend_agency', {
+        p_agency_id: input.agencyId,
+        p_reason: input.reason ?? null,
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => invalidateBilling(queryClient),
+  });
+}
+
+/** Réactive une agence : la mensualité remonte, rien n'est facturé. */
+export function useAdminReactivateAgency() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { agencyId: string; reason?: string | null }) => {
+      const { data, error } = await rpc().rpc('admin_reactivate_agency', {
+        p_agency_id: input.agencyId,
+        p_reason: input.reason ?? null,
+      });
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: async () => invalidateBilling(queryClient),
   });
 }
 

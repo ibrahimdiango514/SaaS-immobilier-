@@ -1785,7 +1785,9 @@ export function useAdminUpdateAgency() {
       // Désormais l'activation passe par la SEULE fonction qui écrit l'offre :
       // `public.admin_activate_agency`, qui crée l'abonnement au besoin.
       if (status === 'active') {
-        const { error: activateError } = await rpcClient().rpc('admin_activate_agency', {
+        // Session 5 : passage par la version journalisee. admin_activate_agency reste
+        // la primitive interne cote base ; l'appeler directement ne journalisait rien.
+        const { error: activateError } = await rpcClient().rpc('admin_activate_agency_journaled', {
           p_agency_id: agencyId,
         });
         if (activateError) throw activateError;
