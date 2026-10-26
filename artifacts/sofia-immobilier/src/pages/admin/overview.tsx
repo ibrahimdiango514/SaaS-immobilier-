@@ -40,7 +40,7 @@ import {
   useActivityLog,
   useRecordSubscriptionPayment,
 } from '@/lib/data-hooks';
-import { useSubscriptionRevenue } from '@/lib/admin-billing-api';
+import { useSubscriptionRevenue, usePlatformRevenueReport } from '@/lib/admin-billing-api';
 import { Button } from '@/components/ui/button';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
 import { AdminHeading } from './admin-shell';
@@ -486,6 +486,52 @@ export default function AdminOverviewPage() {
 }
 
 
+type RevenueTooltipRow = {
+  encaisse: number;
+  revenu: number | null;
+  paiements: number;
+  agences: number;
+};
+
+/** Infobulle du graphique : montant par offre, paiements et agences du mois. */
+function RevenueTooltip({
+  active,
+  label,
+  payload,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: Array<{
+    dataKey?: string | number;
+    name?: string;
+    value?: number | string;
+    color?: string;
+    payload?: RevenueTooltipRow;
+  }>;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  const plans = payload.filter((entry) => String(entry.dataKey ?? '').startsWith('plan_') && Number(entry.value) > 0);
+  return (
+    <div className="revenue-tooltip" data-testid="tooltip-abonnements">
+      <strong>{label}</strong>
+      {plans.length ? (
+        <ul>
+          {plans.map((entry) => (
+            <li key={String(entry.dataKey)}>
+              <span className="revenue-tooltip-dot" style={{ background: entry.color }} />
+              {entry.name} : {cash(Number(entry.value ?? 0), 'XOF')}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p>Encaissé : <strong>{cash(Number(row?.encaisse ?? 0), 'XOF')}</strong></p>
+      <p>Revenu du mois : <strong>{row?.revenu === null || row?.revenu === undefined ? 'non connu' : cash(Number(row.revenu), 'XOF')}</strong></p>
+      <p>{row?.paiements ?? 0} paiement(s) · {row?.agences ?? 0} agence(s)</p>
+    </div>
+  );
+}
+
 type SubscriptionStatusLabel = Record<string, string>;
 const subscriptionStatusLabel: SubscriptionStatusLabel = {
   active: 'Actif',
@@ -502,7 +548,10 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
   // review_payment_declaration ou par l'enregistrement admin). Plus aucun
   // recalcul côté navigateur.
   const [months, setMonths] = useState<6 | 12>(12);
-  const revenueQ = useSubscriptionRevenue(months);
+  // Session 4 : source unique du graphique et des KPI. platform_revenue_report
+  // expose deux séries nommées distinctement (encaisse / revenu) et le journal
+  // des opérations. Le navigateur ne calcule aucun agrégat.
+  const reportQ = usePlatformRevenueReport(months);
   const recordPayment = useRecordSubscriptionPayment();
   const [notice, setNotice] = useState('');
   const [pageError, setPageError] = useState('');
@@ -516,23 +565,54 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
   const compact = (value: number) =>
     new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 
-  const revenue = revenueQ.data;
-  const totals = revenue?.totals;
+  const report = reportQ.data;
+  const totals = report?.totals;
+  const ledger = report?.ledger ?? [];
 
-  const series = useMemo(
+  const planMeta = useMemo(
     () =>
-      (revenue?.months ?? []).map((month) => ({
-        key: month.month_start,
-        label: monthShortLabel(month.month_start),
-        revenus: Number(month.revenue ?? 0),
-        payantes: Number(month.paying_agencies ?? 0),
+      (report?.by_plan ?? []).map((plan) => ({
+        code: plan.name,
+        label: plan.display_name ?? plan.name,
+        activeAgencies: Number(plan.active_agencies ?? 0),
+        price: Number(plan.price_monthly ?? 0),
+        currency: plan.currency,
       })),
-    [revenue?.months],
+    [report?.by_plan],
   );
 
-  const revenueMonth = series.length ? series[series.length - 1].revenus : 0;
-  const revenuePrev = series.length > 1 ? series[series.length - 2].revenus : 0;
-  const revenueVariation = revenuePrev > 0 ? ((revenueMonth - revenuePrev) / revenuePrev) * 100 : null;
+  // Une entrée par mois : le total encaissé, une clé par offre pour les barres
+  // empilées, et le revenu d'abonnement quand la base le connaît.
+  const chartData = useMemo(
+    () =>
+      (report?.months ?? []).map((month) => ({
+        key: month.month_start,
+        label: monthShortLabel(month.month_start),
+        encaisse: Number(month.encaisse ?? 0),
+        revenu: month.revenu_mois === null ? null : Number(month.revenu_mois),
+        paiements: Number(month.payments_count ?? 0),
+        agences: Number(month.agencies_count ?? 0),
+        ...Object.fromEntries(
+          Object.entries(month.by_plan ?? {}).map(([code, amount]) => [`plan_${code}`, Number(amount)]),
+        ),
+      })),
+    [report?.months],
+  );
+
+  const planCodes = useMemo(() => {
+    const codes = new Set<string>();
+    (report?.months ?? []).forEach((month) =>
+      Object.keys(month.by_plan ?? {}).forEach((code) => codes.add(code)),
+    );
+    return [...codes];
+  }, [report?.months]);
+
+  const planLabel = (code: string) => planMeta.find((plan) => plan.code === code)?.label ?? code;
+  const planColor = (index: number) => `var(--si-chart-${(index % 5) + 1})`;
+
+  const encaisseMois = Number(totals?.encaisse_mois ?? 0);
+  const revenuMois = Number(totals?.revenu_mois ?? 0);
+  const sansPaiement = totals?.active_without_payment ?? [];
 
   const handleRecord = (
     agency: { id: string; name: string },
@@ -555,17 +635,17 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     );
   };
 
-  if (agenciesQ.isLoading || revenueQ.isLoading) {
+  if (agenciesQ.isLoading || reportQ.isLoading) {
     return <section className="admin-grid" aria-label="Abonnements"><LoadingRows label="Chargement des abonnements" /></section>;
   }
 
-  if (revenueQ.error) {
+  if (reportQ.error) {
     return (
       <section className="admin-grid" aria-label="Abonnements">
         <div className="state-card error-state" role="alert" data-testid="status-subscription-revenue-error">
           <h2>Abonnements indisponibles</h2>
-          <p>{getSupabaseErrorMessage(revenueQ.error, 'charger les abonnements')}</p>
-          <Button variant="outline" onClick={() => void revenueQ.refetch()}>Réessayer</Button>
+          <p>{getSupabaseErrorMessage(reportQ.error, 'charger les abonnements')}</p>
+          <Button variant="outline" onClick={() => void reportQ.refetch()}>Réessayer</Button>
         </div>
       </section>
     );
@@ -586,60 +666,126 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
           </div>
         </div>
         <div className="revenue-kpis">
-          <article className="kpi-card" data-testid="kpi-abo-revenus-mois"><span className="kpi-label">Revenus du mois</span><strong className="kpi-value">{cash(revenueMonth, 'XOF')}</strong><span className="kpi-foot">Paiements validés ce mois</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-revenus-periode"><span className="kpi-label">Revenus sur {months} mois</span><strong className="kpi-value">{cash(Number(totals?.revenue_period ?? 0), 'XOF')}</strong><span className="kpi-foot">{totals?.payments_period ?? 0} paiement(s) · {totals?.paying_agencies_period ?? 0} agence(s)</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-payantes"><span className="kpi-label">Agences payantes</span><strong className="kpi-value">{totals?.paying_agencies_active ?? 0}</strong><span className="kpi-foot">Abonnement actif</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-essai"><span className="kpi-label">En essai</span><strong className="kpi-value">{totals?.trial_agencies ?? 0}</strong><span className="kpi-foot">Période d’essai en cours</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-suspendues"><span className="kpi-label">Suspendues</span><strong className="kpi-value">{totals?.suspended_agencies ?? 0}</strong><span className="kpi-foot">Agence bloquée pour impayé ou décision admin</span></article>
-          <article className="kpi-card" data-testid="kpi-abo-variation"><span className="kpi-label">Variation revenus</span><strong className="kpi-value"><span className={`trend-chip ${revenueVariation !== null && revenueVariation >= 0 ? 'is-up' : 'is-down'}`}>{revenueVariation === null ? '—' : `${revenueVariation >= 0 ? '+' : '−'}${Math.abs(revenueVariation).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`}</span></strong><span className="kpi-foot">vs mois précédent</span></article>
+          <article className="kpi-card" data-testid="kpi-abo-encaisse">
+            <span className="kpi-label">Encaissé ce mois</span>
+            <strong className="kpi-value">{cash(encaisseMois, 'XOF')}</strong>
+            <span className="kpi-foot">{totals?.paiements_mois ?? 0} paiement(s) ce mois · {cash(Number(totals?.encaisse_total ?? 0), 'XOF')} cumulés</span>
+          </article>
+          <article className="kpi-card" data-testid="kpi-abo-revenu-mois">
+            <span className="kpi-label">Revenu d’abonnement du mois</span>
+            <strong className="kpi-value">{cash(revenuMois, 'XOF')}</strong>
+            <span className="kpi-foot">Somme des offres de {totals?.agences_actives ?? 0} agence(s) active(s)</span>
+          </article>
+          <article className="kpi-card" data-testid="kpi-abo-agences-actives">
+            <span className="kpi-label">Agences actives</span>
+            <strong className="kpi-value">{totals?.agences_actives ?? 0}</strong>
+            <span className="kpi-foot">Abonnement en cours</span>
+          </article>
+          <article className="kpi-card kpi-card-alert" data-testid="kpi-abo-sans-paiement">
+            <span className="kpi-label">Agences actives sans paiement</span>
+            <strong className="kpi-value kpi-value-alert">{sansPaiement.length}</strong>
+            <span className="kpi-foot">
+              {sansPaiement.length ? sansPaiement.map((row) => row.name).join(' · ') : 'Aucune anomalie'}
+            </span>
+          </article>
+          <article className="kpi-card" data-testid="kpi-abo-paiements">
+            <span className="kpi-label">Paiements enregistrés</span>
+            <strong className="kpi-value">{totals?.paiements_total ?? 0}</strong>
+            <span className="kpi-foot">Depuis le début</span>
+          </article>
         </div>
-        {(totals?.pending_declarations ?? 0) > 0 || (totals?.pending_plan_changes ?? 0) > 0 ? (
-          <div className="notice-box" role="status" data-testid="status-billing-queues">
+        {(totals?.active_without_payment?.length ?? 0) > 0 ? (
+          <div className="notice-box notice-box-alert" role="status" data-testid="status-abo-sans-paiement">
             <AlertTriangle size={14} />
             <span>
-              {totals?.pending_declarations ?? 0} déclaration(s) de paiement et
-              {' '}{totals?.pending_plan_changes ?? 0} demande(s) de changement d’offre en attente.
-              {' '}<Link href="/admin/paiements" className="text-action">Traiter <ArrowRight size={12} /></Link>
+              {totals?.active_without_payment?.length} agence(s) active(s) sans aucun encaissement :
+              {' '}{totals?.active_without_payment?.map((row) => row.name).join(', ')}.
+              {' '}Le revenu affiché les compte, l’encaissé non.
             </span>
           </div>
         ) : null}
-        {series.some((row) => row.revenus > 0) ? (
+        {chartData.some((row) => row.encaisse > 0) ? (
           <div className="chart-box" data-testid="chart-abonnements">
-            <ResponsiveContainer width="100%" height={252}>
-              <ComposedChart data={series} margin={{ top: 18, right: 6, left: -8, bottom: 0 }}>
+            <ResponsiveContainer width="100%" height={264}>
+              <ComposedChart data={chartData} margin={{ top: 22, right: 6, left: -8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--si-chart-grid)" vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} tick={{ fill: 'var(--si-chart-axis)' }} />
                 <YAxis yAxisId="left" tickLine={false} axisLine={false} fontSize={10} tickFormatter={(value: number) => compact(Number(value))} width={54} tick={{ fill: 'var(--si-chart-axis)' }} />
-                <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} fontSize={10} width={34} allowDecimals={false} tick={{ fill: 'var(--si-chart-axis)' }} />
-                <Tooltip formatter={(value: number, name: string) => (name === 'Revenus' ? [cash(Number(value), 'XOF'), name] : [value, name])} contentStyle={{ borderRadius: 10, fontSize: 13 }} />
-                <Bar yAxisId="left" dataKey="revenus" fill="var(--si-chart-1)" radius={[6, 6, 0, 0]} name="Revenus">
-                  <LabelList dataKey="revenus" position="insideTop" formatter={(value: number) => compact(Number(value))} style={{ fontSize: 9.5, fontWeight: 700, fill: '#ffffff' }} />
-                </Bar>
-                <Line yAxisId="right" type="monotone" dataKey="payantes" stroke="var(--si-chart-4)" strokeWidth={2.4} dot={{ r: 3 }} name="Payantes">
-                  <LabelList dataKey="payantes" position="top" formatter={(value: number) => String(value)} style={{ fontSize: 10, fontWeight: 700, fill: 'currentColor' }} />
-                </Line>
+                <Tooltip content={<RevenueTooltip />} contentStyle={{ borderRadius: 10, fontSize: 13 }} />
+                {(planCodes.length ? planCodes : ['total']).map((code, index, all) => (
+                  <Bar
+                    key={code}
+                    yAxisId="left"
+                    dataKey={code === 'total' ? 'encaisse' : `plan_${code}`}
+                    stackId="encaisse"
+                    name={code === 'total' ? 'Encaissé' : planLabel(code)}
+                    fill={planColor(index)}
+                    radius={index === all.length - 1 ? [6, 6, 0, 0] : undefined}
+                  >
+                    {index === all.length - 1 ? (
+                      <LabelList dataKey="encaisse" position="top" formatter={(value: number) => compact(Number(value))} style={{ fontSize: 9.5, fontWeight: 700, fill: 'currentColor' }} />
+                    ) : null}
+                  </Bar>
+                ))}
+                <Line yAxisId="left" type="monotone" dataKey="revenu" stroke="var(--si-chart-4)" strokeWidth={2.4} dot={{ r: 3 }} name="Revenu du mois" connectNulls={false} />
               </ComposedChart>
             </ResponsiveContainer>
+            <p className="chart-caption">
+              Barres : encaissé par mois, empilé par offre. Courbe : revenu d’abonnement, connu pour le mois en cours
+              seulement. Les deux mesures ne se comparent pas terme à terme.
+            </p>
           </div>
         ) : (
           <div className="empty-table" data-testid="empty-abonnements-chart">
             <div className="empty-table-mark"><TrendingUp size={17} /></div>
-            <strong>Aucun paiement validé sur la période</strong>
-            <p>Les revenus apparaissent dès la première déclaration de paiement validée dans « Paiements et offres ».</p>
+            <strong>Aucun encaissement sur la période</strong>
+            <p>Les montants apparaissent dès la première validation de paiement ou activation facturée.</p>
             <Link href="/admin/paiements" className="text-action">Ouvrir la file de validation <ArrowRight size={13} /></Link>
           </div>
         )}
-        {revenue?.by_plan?.length ? (
+        <div className="panel-subhead">
+          <h3>Journal des opérations</h3>
+          <p>Chaque activation, montée ou baisse d’offre et chaque paiement validé, avec son effet sur les deux indicateurs.</p>
+        </div>
+        {ledger.length ? (
+          <div className="table-wrap">
+            <table className="data-table" data-testid="table-journal-operations">
+              <thead>
+                <tr><th>Date</th><th>Agence</th><th>Opération</th><th>Offre</th><th>Encaissé</th><th>Impact revenu</th><th>Référence</th></tr>
+              </thead>
+              <tbody>
+                {ledger.map((row) => (
+                  <tr key={`${row.id}-${row.occurred_at}`} data-testid={`row-operation-${row.id}`}>
+                    <td>{dateLabel(row.occurred_at)}</td>
+                    <td><strong>{row.agency_name}</strong></td>
+                    <td><span className={`status-pill ${row.operation.startsWith('Baisse') ? 'status-unavailable' : row.operation.startsWith('Active') ? 'status-available' : 'status-reserved'}`}>{row.operation}</span></td>
+                    <td>{row.plan_name}</td>
+                    <td>{Number(row.encaisse) > 0 ? cash(Number(row.encaisse), 'XOF') : '—'}</td>
+                    <td>
+                      {row.impact_revenu === null
+                        ? '—'
+                        : <span className={Number(row.impact_revenu) < 0 ? 'amount-negative' : Number(row.impact_revenu) > 0 ? 'amount-positive' : ''}>{Number(row.impact_revenu) > 0 ? '+' : ''}{cash(Number(row.impact_revenu), 'XOF')}</span>}
+                    </td>
+                    <td>{row.reference ?? row.motif ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-table"><strong>Aucune opération sur la période</strong></div>
+        )}
+        {planMeta.length ? (
           <div className="plan-breakdown" data-testid="list-revenue-by-plan">
-            {revenue.by_plan.map((plan) => (
-              <div className="plan-row" key={plan.id} data-testid={`row-plan-revenue-${plan.name}`}>
+            {planMeta.map((plan) => (
+              <div className="plan-row" key={plan.code} data-testid={`row-plan-revenue-${plan.code}`}>
                 <span>
-                  <strong>{plan.display_name ?? plan.name}</strong>
-                  <small>{plan.active_agencies} active(s) · {plan.trial_agencies} essai · {plan.total_agencies} au total</small>
+                  <strong>{plan.label}</strong>
+                  <small>{plan.activeAgencies} agence(s) active(s)</small>
                 </span>
                 <span className="plan-price">
-                  {cash(Number(plan.revenue_total ?? 0), plan.currency)}
-                  <small>{cash(Number(plan.price_monthly), plan.currency)}/mois</small>
+                  {cash(plan.price, plan.currency)}
+                  <small>par mois</small>
                 </span>
               </div>
             ))}

@@ -1828,6 +1828,10 @@ export function useAdminUpdateAgency() {
         queryClient.invalidateQueries({ queryKey: getSubscriptionPaymentsQueryKey() }),
         queryClient.invalidateQueries({ queryKey: getPlansQueryKey() }),
         queryClient.invalidateQueries({ queryKey: ['plan'] }),
+        // Session 4 : le rapport comptable doit suivre immédiatement une
+        // activation ou un changement d'offre, sans rechargement de page.
+        queryClient.invalidateQueries({ queryKey: ['admin', 'platform-revenue-report'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin', 'subscription-revenue'] }),
         queryClient.invalidateQueries({ queryKey: ['billing'] }),
         queryClient.invalidateQueries({ queryKey: ['sofia', 'agencies'] }),
       ]);

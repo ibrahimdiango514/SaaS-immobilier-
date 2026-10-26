@@ -119,6 +119,82 @@ export const getPlatformSettingsQueryKey = () => ['admin', 'platform-settings'] 
 export const getSubscriptionRevenueQueryKey = (months: number) =>
   ['admin', 'subscription-revenue', months] as const;
 
+/* ------------------------------------------------------------------ */
+/* Rapport comptable — source unique du graphique et des KPI           */
+/* ------------------------------------------------------------------ */
+// public.platform_revenue_report distingue deux notions qui ne doivent
+// jamais être confondues :
+//   encaisse  = argent réellement reçu (table subscription_payments) ;
+//   revenu    = somme des prix des offres ACTIVES (ce que le parc rapporte),
+//               recalculé à chaque changement d'offre.
+// Le front ne somme rien : il affiche ce que la base renvoie.
+export interface RevenueMonthRow {
+  month_start: string;
+  encaisse: number;
+  /** null pour les mois passés : non reconstituable sans historique d'offre. */
+  revenu_mois: number | null;
+  payments_count: number;
+  agencies_count: number;
+  by_plan: Record<string, number>;
+}
+
+export interface RevenueLedgerRow {
+  id: string;
+  occurred_at: string;
+  agency_name: string;
+  operation: string;
+  plan_name: string;
+  encaisse: number;
+  impact_revenu: number | null;
+  reference: string | null;
+  motif: string | null;
+}
+
+export interface PlatformRevenueReport {
+  months: RevenueMonthRow[];
+  ledger: RevenueLedgerRow[];
+  totals: {
+    encaisse_mois: number;
+    encaisse_total: number;
+    revenu_mois: number;
+    paiements_mois: number;
+    paiements_total: number;
+    agences_actives: number;
+    active_without_payment: Array<{
+      id: string;
+      name: string;
+      plan_name: string;
+      price_monthly: number;
+      starts_at: string | null;
+      ends_at: string | null;
+    }>;
+    underpaid: Array<{ id: string; name: string; plan_name: string; price_monthly: number; paid_total: number }>;
+  };
+  by_plan: Array<{
+    id: string;
+    name: string;
+    display_name: string | null;
+    price_monthly: number;
+    currency: string;
+    sort_order: number;
+    active_agencies: number;
+  }>;
+}
+
+export const getPlatformRevenueReportQueryKey = (months: number) =>
+  ['admin', 'platform-revenue-report', months] as const;
+
+export function usePlatformRevenueReport(months = 12) {
+  return useQuery({
+    queryKey: getPlatformRevenueReportQueryKey(months),
+    queryFn: async (): Promise<PlatformRevenueReport> => {
+      const { data, error } = await rpc().rpc('platform_revenue_report', { p_months: months });
+      if (error) throw error;
+      return data as PlatformRevenueReport;
+    },
+  });
+}
+
 const DECLARATION_COLUMNS =
   'id, agency_id, amount, currency, method, transaction_reference, paid_on, proof_path, declared_by, status, note, reviewed_by, reviewed_at, review_note, payment_id, created_at';
 const PLAN_CHANGE_COLUMNS =
@@ -209,6 +285,12 @@ function invalidateBilling(queryClient: ReturnType<typeof useQueryClient>) {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: getDeclarationsQueryKey() }),
     queryClient.invalidateQueries({ queryKey: getPlanChangeRequestsQueryKey() }),
+    // Session 4 : le rapport comptable est la source du graphique et des KPI.
+    // Sans cette invalidation, valider un paiement ou changer une offre laissait
+    // les chiffres figés jusqu'au rechargement de la page. On invalide par
+    // préfixe pour couvrir les deux périodes possibles (6 et 12 mois).
+    queryClient.invalidateQueries({ queryKey: ['admin', 'platform-revenue-report'] }),
+    queryClient.invalidateQueries({ queryKey: ['admin', 'subscription-revenue'] }),
     queryClient.invalidateQueries({ queryKey: getSubscriptionRevenueQueryKey(12) }),
     queryClient.invalidateQueries({ queryKey: getAllAgenciesQueryKey() }),
     queryClient.invalidateQueries({ queryKey: getSubscriptionsQueryKey() }),
