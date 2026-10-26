@@ -19,7 +19,7 @@
 // auth.user_metadata et dans saas_immobilier.user_profiles (le verrou de
 // WorkspaceGate lit ce dernier). L'action est tracée dans activity_log.
 // =============================================================================
-import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 // BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
 // Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
 // fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier

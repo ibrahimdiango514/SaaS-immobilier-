@@ -27,7 +27,7 @@
 // Les tokens sont enregistrés dans `agency_usage` / `usage_events` via
 // `public.record_ai_usage()` (rôle service_role).
 // =============================================================================
-import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 // BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
 // Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
 // fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier

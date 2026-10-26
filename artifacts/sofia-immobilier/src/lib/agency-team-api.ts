@@ -273,7 +273,7 @@ export function redeemAgencyInvitation(input: {
   fullName: string;
   password: string;
 }) {
-  return invoke<RedeemedInvitation>('redeem-agency-invitation', {
+  return invoke<RedeemedInvitation>('redeem-agency-invitation-v2', {
     token: input.token,
     email: input.email,
     full_name: input.fullName,
@@ -286,7 +286,7 @@ export function redeemAgencyInvitation(input: {
  * Le mot de passe est généré côté serveur et n'est renvoyé qu'une seule fois.
  */
 export function resetAgentPassword(input: { membershipId?: string; agencyId?: string; targetUserId?: string }) {
-  return invoke<ResetPasswordResult>('reset-agent-password', {
+  return invoke<ResetPasswordResult>('reset-agent-password-v2', {
     membership_id: input.membershipId,
     agency_id: input.agencyId,
     target_user_id: input.targetUserId,

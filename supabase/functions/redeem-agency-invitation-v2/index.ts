@@ -11,7 +11,7 @@
 //       que lorsque le jeton est valable (information nécessaire à l'agent).
 //   (c) limitation de tentatives par jeton ET par adresse IP, côté base.
 //   (d) longueur minimale de mot de passe imposée.
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2'
 // BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
 // Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
 // fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
