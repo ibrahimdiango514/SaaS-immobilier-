@@ -31,7 +31,6 @@ import {
   usePropertyMedia, useUploadPropertyMedia, useDeletePropertyMedia,
   useUploadPropertyMediaBatch, useDeletePropertyMediaMany, useReorderPropertyMedia,
   useAgencyMediaRefs, useAccountState, getAccountState, isBlockedAccount, useArchivedProperties,
-  useRevenueOperations,
   usePlatformRole, useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead,
   getCurrentProfileQueryKey,
   useTrackPropertyView, getPlatformRole,
@@ -40,7 +39,7 @@ import {
 } from '@/lib/data-hooks';
 import { compressImages } from '@/lib/image-tools';
 // BLOC 3 : compteur de photos et decoupe des envois multiples selon l'offre.
-import { formatQuota, splitByPhotoQuota, usePhotoQuota } from '@/lib/plan-limits';
+import { formatQuota, splitByPhotoQuota, useAgencyPlan, usePhotoQuota } from '@/lib/plan-limits';
 import { PhotoQuotaBar } from '@/components/photo-quota';
 // BLOC 1 (session 3) : état de l'offre visible partout (essai, sans offre, retard).
 import { PlanStatusBanner } from '@/components/plan-status-banner';
@@ -89,8 +88,6 @@ import TeamPage from '@/pages/team';
 import JoinAgencyPage from '@/pages/rejoindre';
 import ForcePasswordPage from '@/pages/force-password';
 import MyOfferPage from '@/pages/my-offer';
-import { Area, AreaChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { bucketize, computeStats, periodRange } from '@/lib/revenue-utils';
 
 const queryClient = new QueryClient();
 
@@ -347,13 +344,11 @@ function Overview() {
   // administrateurs de l'agence. Un agent (ou un role non gestionnaire) ne voit
   // ni le panneau CA, ni ses indicateurs.
   const canSeeRevenue = activeMembership?.role === 'owner' || activeMembership?.role === 'admin';
-  // BLOC 3 : les filtres de periode du CA sont un module a part (`ca_filters`),
-  // inclus a partir de l'offre Pro. Le graphique `ca_chart` reste dans Essentiel.
-  const moduleAccess = useActiveModuleAccess();
-  const canFilterCa = moduleAccess.has('ca_filters');
   const summary = useDashboardSummary(activeAgencyId);
-  const revenueQ = useRevenueOperations(activeAgencyId);
-  const [caPeriod, setCaPeriod] = useState<'month' | 'm6' | 'm12' | 'year'>('m6');
+  // Espace agence : seul le montant mensuel de l'offre en cours est affiche.
+  // Le graphique de commissions et ses indicateurs ont ete retires : ils ne
+  // correspondaient a aucun engagement ni encaissement reel.
+  const planQ = useAgencyPlan(activeAgencyId);
   const properties = useProperties(activeAgencyId);
   const pipeline = usePipeline(activeAgencyId);
   if (summary.isLoading || properties.isLoading || pipeline.isLoading) return <><Heading eyebrow="Votre activité" title="Vue d’ensemble" description="Les repères essentiels de votre agence, à jour et accessibles." /><LoadingRows /></>;
@@ -368,15 +363,6 @@ function Overview() {
     { label: 'Opportunités', count: summary.data?.opportunities ?? 0, foot: 'Dossiers du pipeline', icon: SlidersHorizontal },
     { label: 'Membres actifs', count: summary.data?.activeMembers ?? 0, foot: 'Accès en cours', icon: UsersRound },
   ];
-  const caOps = revenueQ.data ?? [];
-  const caRange = periodRange(caPeriod);
-  const caStats = computeStats(caOps, caRange);
-  const caMonthStats = computeStats(caOps, periodRange('month'));
-  const caYearStats = computeStats(caOps, periodRange('year'));
-  const caBuckets = bucketize(caOps, caRange, 'month');
-  const compact = (value: number) => new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-  const caTrendClass = caStats.variation !== null && caStats.variation >= 0 ? 'is-up' : 'is-down';
-  const caTrendLabel = caStats.variation === null ? 'Aucune période précédente' : `${caStats.variation >= 0 ? '▲' : '▼'} ${Math.abs(caStats.variation).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} % vs période précédente`;
   const latest = (properties.data ?? []).slice(0, 5);
   const stageCounts = Object.entries((pipeline.data ?? []).reduce<Record<string, number>>((acc, row) => { acc[row.etape] = (acc[row.etape] ?? 0) + 1; return acc; }, {})).sort((a, b) => b[1] - a[1]);
   const recentPipeline = (pipeline.data ?? []).slice(0, 4);
@@ -394,54 +380,19 @@ function Overview() {
     <section className="stat-grid stat-grid-eight" aria-label="Indicateurs de l’agence">{stats.map(({ label, count, foot, icon: Icon }, i) => <article className="stat-card" key={label} data-testid={`card-stat-${i + 1}`}><div className="stat-top"><span>{label}</span><span className="stat-icon"><Icon size={14} /></span></div><div className="stat-value" data-testid={`value-stat-${i + 1}`}>{count}</div><div className="stat-foot">{foot}</div></article>)}</section>
 
     {canSeeRevenue && (
-    <section className="panel revenue-overview-panel" data-testid="panel-ca-dashboard">
+    <section className="panel revenue-overview-panel" data-testid="panel-mensualite-dashboard">
       <div className="panel-head">
-        <div><h2><Wallet size={17} /> Chiffre d’affaires</h2><p>Commissions calculées automatiquement à chaque vente ou location · volume des transactions affiché en secondaire</p></div>
-        {canFilterCa ? (
-          <div className="revenue-toolbar revenue-period-select" role="group" aria-label="Période du chiffre d’affaires">
-          {([['month', 'Mois courant'], ['m6', '6 mois'], ['m12', '12 mois'], ['year', 'Année']] as const).map(([key, label]) => (
-            <button key={key} type="button" className={`button-link period-pill${caPeriod === key ? ' is-active' : ''}`} aria-pressed={caPeriod === key} onClick={() => setCaPeriod(key)} data-testid={`button-ca-periode-${key}`}>{label}</button>
-          ))}
-          </div>
-        ) : (
-          <div className="module-inline-locked" data-testid="status-ca-filters-locked">
-            <Lock size={13} />
-            <span>
-              Filtres de période inclus à partir de l’offre <strong>Pro</strong>.
-              Le graphique ci-dessous reste disponible.
-            </span>
-            <Link href="/mon-offre" className="text-action" data-testid="link-ca-filters-upgrade">Voir les offres</Link>
-          </div>
-        )}
+        <div><h2><Wallet size={17} /> Mon abonnement</h2><p>Montant mensuel de l’offre actuellement appliquée à votre agence</p></div>
+        <Link href="/mon-offre" className="text-action" data-testid="link-offre-dashboard">Voir mon offre <ArrowRight size={13} /></Link>
       </div>
-      <div className="revenue-kpis revenue-kpis-dashboard">
-        <article className="kpi-card" data-testid="kpi-ca-mois"><span className="kpi-label">CA du mois</span><strong className="kpi-value">{cash(caMonthStats.ca, 'XOF')}</strong><span className="kpi-foot">Commission · volume {cash(caMonthStats.volume, 'XOF')} · {caMonthStats.count} opération(s)</span></article>
-        <article className="kpi-card" data-testid="kpi-ca-annee"><span className="kpi-label">CA de l’année</span><strong className="kpi-value">{cash(caYearStats.ca, 'XOF')}</strong><span className="kpi-foot">Commission · volume {cash(caYearStats.volume, 'XOF')}</span></article>
-        <article className="kpi-card" data-testid="kpi-ca-variation"><span className="kpi-label">Variation de la période</span><strong className="kpi-value"><span className={`trend-chip ${caTrendClass}`}>{caStats.variation === null ? '—' : `${caStats.variation >= 0 ? '+' : '−'}${Math.abs(caStats.variation).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`}</span></strong><span className="kpi-foot">{caTrendLabel}</span></article>
-        <article className="kpi-card" data-testid="kpi-ca-volume"><span className="kpi-label">Volume des transactions</span><strong className="kpi-value">{cash(caStats.volume, 'XOF')}</strong><span className="kpi-foot">{caStats.count} opération(s) sur la période · panier moyen {cash(caStats.count ? caStats.ca / caStats.count : 0, 'XOF')}</span></article>
-      </div>
-      {revenueQ.isLoading ? <LoadingRows label="Chargement du chiffre d’affaires" /> : revenueQ.error ? <ErrorState error={revenueQ.error} retry={useSafeRetry(revenueQ)} testId="status-ca-dashboard-error" /> : caBuckets.length ? (
-        <div className="chart-box" data-testid="chart-ca-dashboard">
-          <ResponsiveContainer width="100%" height={264}>
-            <AreaChart data={caBuckets} margin={{ top: 18, right: 10, left: -6, bottom: 0 }}>
-              <defs>
-                <linearGradient id="caDashGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#0f766e" stopOpacity={0.35} />
-                  <stop offset="100%" stopColor="#0f766e" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="currentColor" opacity={0.12} vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-              <YAxis tickLine={false} axisLine={false} fontSize={10} tickFormatter={(v: number) => compact(Number(v))} width={52} />
-              <Tooltip formatter={(value: number) => [cash(Number(value), 'XOF'), 'Commission']} />
-              <Area type="monotone" dataKey="ca" stroke="var(--si-chart-1)" strokeWidth={2.4} fill="url(#caDashGrad)" name="Commission">
-                <LabelList dataKey="ca" position="top" formatter={(value: number) => compact(Number(value))} style={{ fontSize: 10, fontWeight: 700, fill: 'currentColor' }} />
-              </Area>
-            </AreaChart>
-          </ResponsiveContainer>
+      {planQ.isLoading ? <LoadingRows label="Chargement de la mensualité" /> : planQ.error ? <ErrorState error={planQ.error} retry={useSafeRetry(planQ)} testId="status-mensualite-error" /> : (
+        <div className="revenue-kpis revenue-kpis-dashboard revenue-kpis-single">
+          <article className="kpi-card" data-testid="kpi-mensualite-mois">
+            <span className="kpi-label">Mensualité du mois</span>
+            <strong className="kpi-value">{cash(Number(planQ.data?.price_monthly ?? 0), planQ.data?.currency ?? 'XOF')}</strong>
+            <span className="kpi-foot">{planQ.data ? `Offre ${planQ.data.display_name ?? planQ.data.name}` : 'Aucune offre active'}</span>
+          </article>
         </div>
-      ) : (
-        <div className="empty-table" data-testid="empty-ca-dashboard"><div className="empty-table-mark"><Wallet size={17} /></div><strong>Aucune opération sur cette période</strong><p>Le chiffre d’affaires se remplit automatiquement dès qu’un bien passe en vendu ou loué.</p></div>
       )}
     </section>
     )}

@@ -4239,3 +4239,7 @@ button.row-action.danger-action { color: var(--si-danger); }
 }
 
 [data-theme='dark'] .panel-subhead-row .button-link { color: #99f6e4; }
+
+/* Espace agence : une seule mensualite, plus de graphique de commissions. */
+.revenue-kpis-single { grid-template-columns: minmax(0, 340px); }
+@media (max-width: 640px) { .revenue-kpis-single { grid-template-columns: 1fr; } }
