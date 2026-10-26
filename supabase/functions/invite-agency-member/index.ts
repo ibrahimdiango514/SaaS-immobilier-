@@ -1,27 +1,26 @@
-// LOT A (point 4) — LIEN D'INVITATION, SANS SMTP.
-// Remplace la version déployée qui exigeait inviteUserByEmail (donc un SMTP).
+// LOT A (point 4) - LIEN D'INVITATION, SANS SMTP.
 //
-// Le jeton est généré et haché CÔTÉ BASE par public.create_agency_invitation()
+// Le jeton est genere et hache COTE BASE par public.create_agency_invitation()
 // (sha256, usage unique, 48 h). Cette fonction ne fait que :
 //   1. authentifier l'appelant,
-//   2. vérifier qu'il est propriétaire/administrateur de l'agence ciblée,
-//   3. vérifier que l'agence n'est pas suspendue,
-//   4. vérifier que la limite d'utilisateurs n'est pas atteinte
+//   2. verifier qu'il est proprietaire/administrateur de l'agence ciblee,
+//   3. verifier que l'agence n'est pas suspendue,
+//   4. verifier que la limite d'utilisateurs n'est pas atteinte
 //      (invitations en attente COMPRISES),
 //   5. renvoyer le lien en clair UNE SEULE FOIS.
-// Aucun email n'est envoyé : le lien est partagé manuellement (WhatsApp).
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
-// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
-// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
-// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
-// présent dans l'artefact déployé, et la fonction échouait au chargement du
-// module — d'où une création de membre et un lien d'invitation qui ne
-// produisaient rien côté navigateur.
-// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
-// est désormais AUTONOME, sans aucune importation relative.
-// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
-// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+// Aucun email n'est envoye : le lien est partage manuellement (WhatsApp).
+//
+// SECURITE - verify_jwt est desactive cote plateforme.
+// Le preflight CORS (OPTIONS) ne porte jamais d'en-tete Authorization : la
+// passerelle le rejetait avant d'executer ce code, le navigateur bloquait
+// l'appel, et le client ne recevait qu'un "Failed to fetch" sans statut ni
+// message. Aucune protection n'est perdue : la fonction exige un Bearer,
+// valide le jeton avec auth.getUser() et verifie l'appartenance a l'agence
+// avec has_agency_role().
+//
+// Source volontairement en ASCII pur (voir create-agency-member-v2).
+import { createClient } from 'npm:@supabase/supabase-js@2'
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -37,7 +36,7 @@ function json(body: unknown, status = 200) {
 
 const allowedRoles = new Set(['admin', 'agent'])
 
-// Jamais codé en dur dans la logique métier : configurable par déploiement.
+// Jamais code en dur dans la logique metier : configurable par deploiement.
 const appBaseUrl = (Deno.env.get('SOFIA_APP_BASE_URL') ?? '').replace(/\/$/, '')
 
 Deno.serve(async (request) => {
@@ -66,12 +65,12 @@ Deno.serve(async (request) => {
   })
   const admin = createClient(url, service, { auth: { persistSession: false } })
 
-  // 1. Appelant authentifié
+  // 1. Appelant authentifie
   const { data: callerData, error: callerError } = await callerClient.auth.getUser()
   const caller = callerData.user
   if (callerError || !caller) return json({ error: 'authentication_required' }, 401)
 
-  // 2. Propriétaire ou administrateur de CETTE agence (le JWT fait foi, pas le body)
+  // 2. Proprietaire ou administrateur de CETTE agence (le JWT fait foi, pas le body)
   const { data: allowed, error: allowedError } = await callerClient.rpc('has_agency_role', {
     target_agency_id: agencyId,
     required_role: 'admin',
@@ -80,19 +79,15 @@ Deno.serve(async (request) => {
     return json({ error: 'agency_admin_or_owner_required', details: allowedError?.message ?? null }, 403)
   }
 
-  // 3. Agence non suspendue
-  // BLOC 10 : `agence_active` attend `p_agency_id` (et non `agency_id`), et
-  // PostgREST résout le RPC dans `public` — d'où le wrapper public.agence_active.
-  // Avec l'ancien nom de paramètre l'appel échouait toujours et la fonction
-  // renvoyait `agency_suspended` pour TOUTE agence, même active.
+  // 3. Agence non suspendue (RPC public.agence_active attend p_agency_id)
   const { data: active, error: activeError } = await callerClient.rpc('agence_active', { p_agency_id: agencyId })
   if (activeError) {
     return json({ error: 'agency_status_check_failed', details: activeError.message, code: activeError.code ?? null }, 500)
   }
   if (active !== true) return json({ error: 'agency_suspended' }, 403)
 
-  // 4. Limite d'utilisateurs non atteinte — invitations en attente comprises.
-  //    agency_seat_availability compte déjà members_active + invitations_pending.
+  // 4. Limite d'utilisateurs non atteinte - invitations en attente comprises.
+  //    agency_seat_availability compte deja members_active + invitations_pending.
   const { data: seats, error: seatsError } = await callerClient.rpc('agency_seat_availability', {
     p_agency_id: agencyId,
   })
@@ -107,8 +102,8 @@ Deno.serve(async (request) => {
     }, 409)
   }
 
-  // 5. Génération du jeton CÔTÉ BASE (haché sha256, usage unique, 48 h).
-  //    La base applique elle-même la limite de places : double verrou.
+  // 5. Generation du jeton COTE BASE (hache sha256, usage unique, 48 h).
+  //    La base applique elle-meme la limite de places : double verrou.
   const { data: invitation, error: invitationError } = await admin.rpc('create_agency_invitation', {
     p_agency_id: agencyId,
     p_role: role,
@@ -118,7 +113,7 @@ Deno.serve(async (request) => {
     const limit = invitationError?.message?.includes('imite')
     return json({
       error: limit ? 'member_limit_reached' : 'invitation_creation_failed',
-      details: invitationError?.message ?? 'aucune invitation renvoyée',
+      details: invitationError?.message ?? 'aucune invitation renvoyee',
       code: invitationError?.code ?? null,
     }, limit ? 409 : 500)
   }
@@ -128,14 +123,13 @@ Deno.serve(async (request) => {
   const expiresAt = (row as { expires_at: string }).expires_at
   const invitationId = (row as { invitation_id: string }).invitation_id
 
-  // BLOC 11 : `SOFIA_APP_BASE_URL` absent -> on retombe sur l'URL de production
-  // connue au lieu de renvoyer un lien null (l'interface n'affichait alors qu'un
-  // jeton brut, sans lien partageable ni bouton WhatsApp).
+  // SOFIA_APP_BASE_URL absent -> on retombe sur l'URL de production connue
+  // au lieu de renvoyer un lien null.
   const effectiveBaseUrl = appBaseUrl || 'https://sbc-ai-agency-dashbord.netlify.app'
   const invitationUrl = `${effectiveBaseUrl}/rejoindre?token=${encodeURIComponent(tokenPlain)}`
 
-  // Le jeton en clair n'est renvoyé qu'ici, une seule fois : la base ne stocke
-  // que son empreinte sha256, il est donc irrécupérable ensuite.
+  // Le jeton en clair n'est renvoye qu'ici, une seule fois : la base ne stocke
+  // que son empreinte sha256, il est donc irrecuperable ensuite.
   return json({
     invitation_id: invitationId,
     token: tokenPlain,
@@ -143,6 +137,6 @@ Deno.serve(async (request) => {
     expires_at: expiresAt,
     role,
     seats: seatsInfo,
-    warning: appBaseUrl ? undefined : 'SOFIA_APP_BASE_URL non configuré : URL de production utilisée par repli.',
+    warning: appBaseUrl ? undefined : 'SOFIA_APP_BASE_URL non configure : URL de production utilisee par repli.',
   }, 201)
 })
