@@ -1,0 +1,148 @@
+-- ============================================================================
+-- SAUVEGARDE DE L'ETAT AVANT APPLICATION
+-- Migration : db/migrations/2026-10-26_session4_revenus_abonnements.sql
+-- Projet    : xbuuhfwobrafcbgtdgjx  (schema saas_immobilier, RPC dans public)
+-- Date      : 2026-10-26 21:15:38 UTC
+-- Branche   : arena/258827d7-saas-immobilier  @  039fbe41618166c4fc85b63e89396365d1d311a7
+--
+-- Ce fichier ne contient AUCUNE instruction destructive et n'a pas ete
+-- execute. Il fige l'etat observable des objets touches, pour permettre de
+-- prouver apres coup que rien n'a bouge en dehors des ajouts de la migration.
+--
+-- La migration est strictement ADDITIVE :
+--   * 1 colonne plan_id + 1 index + 1 colonne reference sur subscription_payments
+--   * 3 fonctions NOUVELLES (aucune fonction existante remplacee)
+-- Aucune ligne de subscription_payments n'est lue en ecriture par la migration.
+-- ============================================================================
+
+
+-- ============================================================================
+-- 1. subscription_payments : structure AVANT (16 colonnes, ordre physique)
+-- ============================================================================
+-- pos | colonne            | type                        | not null
+-- ----+--------------------+-----------------------------+---------
+--   1 | id                 | uuid                        | true
+--   2 | agency_id          | uuid                        | true
+--   3 | subscription_id    | uuid                        | false
+--   4 | amount             | numeric                     | true
+--   5 | currency           | text                        | true
+--   6 | paid_at            | date                        | true
+--   7 | period_start       | date                        | false
+--   8 | period_end         | date                        | false
+--   9 | method             | text                        | true
+--  10 | recorded_by        | uuid                        | false
+--  11 | note               | text                        | false
+--  12 | created_at         | timestamp with time zone    | true
+--  13 | declaration_id     | uuid                        | false
+--  14 | provider           | text                        | false
+--  15 | provider_reference | text                        | false
+--  16 | provider_status    | text                        | false
+--
+-- Apres migration, les colonnes 17 (plan_id) et 18 (reference) doivent
+-- apparaitre a la suite. Les 16 ci-dessus doivent rester identiques.
+
+
+-- ============================================================================
+-- 2. subscription_payments : contenu AVANT (1 ligne)
+-- ============================================================================
+-- Controle global : 1 ligne, somme = 50000 XOF
+-- Empreinte md5 des 16 colonnes d'origine, dans l'ordre ci-dessus,
+-- concatenees par concat_ws('|', ...) avec NULL traite comme chaine vide :
+--
+--   id = 5573bc89-3c90-4a7c-b0df-671ed82d9abc
+--   md5 = 9fb9fcf747a9de1cd688bc13313de1f4
+--
+-- Detail de la ligne :
+--   id                : 5573bc89-3c90-4a7c-b0df-671ed82d9abc
+--   agency_id         : agence « SBC AI Agency Demo »
+--   subscription_id   : cbe08bac-a4e1-420c-b55f-7d54a5e59cb6
+--   amount            : 50000
+--   currency          : XOF
+--   paid_at           : 2026-10-21
+--   period_start      : 2026-10-21
+--   period_end        : 2026-11-20
+--   method            : manual
+--   recorded_by       : (valeur d'origine conservee en base ; non reproduite ici)
+--   note              : (valeur d'origine conservee en base ; non reproduite ici)
+--   created_at        : 2026-10-21 00:40:49.157128+00
+--   declaration_id    : NULL
+--   provider          : (null)
+--   provider_reference: (null)
+--   provider_status   : (null)
+--
+-- Filet de securite ultime (NE PAS EXECUTER sans decision explicite : cela
+-- recreerait une ligne supprimee). Les valeurs recorded_by et note doivent
+-- etre relues en base avant tout usage, elles ne sont pas figees ici.
+--
+-- INSERT INTO saas_immobilier.subscription_payments
+--   (id, agency_id, subscription_id, amount, currency, paid_at,
+--    period_start, period_end, method, created_at, declaration_id)
+-- VALUES
+--   ('5573bc89-3c90-4a7c-b0df-671ed82d9abc',
+--    (SELECT id FROM saas_immobilier.agencies WHERE name = 'SBC AI Agency Demo'),
+--    'cbe08bac-a4e1-420c-b55f-7d54a5e59cb6',
+--    50000, 'XOF', '2026-10-21', '2026-10-21', '2026-11-20',
+--    'manual', '2026-10-21 00:40:49.157128+00', NULL);
+
+
+-- ============================================================================
+-- 3. Compteurs de reference AVANT
+-- ============================================================================
+-- subscription_payments : 1
+-- payment_declarations  : 0
+-- agency_subscriptions  : 2
+-- dont agency_subscriptions.status = 'active' : 2
+
+
+-- ============================================================================
+-- 4. Fonctions PREEXISTANTES a ne pas modifier
+-- ============================================================================
+-- Aucune des trois fonctions ci-dessous n'est touchee par la migration.
+-- Leur empreinte md5 permet de prouver, apres application, qu'elles sont
+-- byte pour byte identiques. Calcul : md5(pg_get_functiondef(oid)).
+--
+-- public.admin_assign_plan(p_agency_id uuid, p_plan_id uuid, p_status text, p_note text)
+--   RETURNS jsonb
+--   md5    = fdebfdd8c93ce245c7095604a39d68db
+--   taille = 3788 caracteres
+--
+-- public.platform_subscription_revenue(p_months integer)
+--   RETURNS jsonb
+--   md5    = 36645bbc22f6426307de02c5745e42b8
+--   taille = 4730 caracteres
+--
+-- public.review_payment_declaration(p_declaration_id uuid, p_decision text, p_note text)
+--   RETURNS uuid
+--   md5    = 61082028404ef9a8596238e45be999fb
+--   taille = 3166 caracteres
+--
+-- Requete de verification (a rejouer apres application) :
+--
+-- SELECT p.proname,
+--        md5(pg_get_functiondef(p.oid)) AS md5_def
+--   FROM pg_proc p
+--   JOIN pg_namespace n ON n.oid = p.pronamespace
+--  WHERE n.nspname = 'public'
+--    AND p.proname IN ('platform_subscription_revenue',
+--                      'admin_assign_plan',
+--                      'review_payment_declaration')
+--  ORDER BY 1;
+
+
+-- ============================================================================
+-- 5. Objets qui doivent apparaitre APRES application
+-- ============================================================================
+-- Colonnes   : saas_immobilier.subscription_payments.plan_id    (uuid, null)
+--              saas_immobilier.subscription_payments.reference  (text, null)
+-- Index      : saas_immobilier.subscription_payments_plan_id_idx
+-- Fonctions  : public.admin_bill_subscription(uuid, uuid, numeric, date, text, text, text)
+--              public.admin_activate_agency_billed(uuid, uuid, numeric, date, text, text, text)
+--              public.platform_revenue_report(integer)
+-- Droits     : EXECUTE revoque a PUBLIC, accorde a authenticated (les 3)
+--
+-- Ces trois fonctions n'existaient PAS avant (verifie dans pg_proc) : il n'y a
+-- donc aucune definition anterieure a sauvegarder pour elles. Le rollback les
+-- supprime : voir 2026-10-26_session4_revenus_abonnements_rollback.sql.
+--
+-- IMPORTANT : la migration ne modifie aucune politique RLS, aucun GRANT
+-- existant, et aucune ligne de donnees.
