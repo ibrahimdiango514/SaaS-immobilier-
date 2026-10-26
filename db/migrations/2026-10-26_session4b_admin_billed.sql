@@ -1,5 +1,5 @@
 -- =============================================================================
--- PROPOSITION - NON APPLIQUEE EN BASE
+-- APPLIQUEE EN BASE le 2026-10-26 (voir docs/JOURNAL-APPLICATION-2026-10-26_session4b.md)
 -- Session 4b : chaque validation ou changement d'offre par l'admin produit un
 --              paiement, dans la meme transaction.
 -- Date : 2026-10-26
