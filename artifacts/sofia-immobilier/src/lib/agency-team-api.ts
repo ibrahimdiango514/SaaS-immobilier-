@@ -93,6 +93,11 @@ const errorLabels: Record<string, string> = {
   server_error: 'Erreur serveur. Réessayez.',
   agency_status_check_failed: 'Le statut de l’agence n’a pas pu être vérifié. Réessayez.',
   edge_function_unavailable: 'La fonction serveur n’a pas répondu. Réessayez ; si l’erreur persiste, contactez le support.',
+  // Le navigateur n'a obtenu AUCUNE réponse lisible de la fonction.
+  edge_function_unreachable:
+    'Le serveur n’a renvoyé aucune réponse exploitable. La fonction a peut-être échoué au démarrage, ou la requête a été bloquée avant de partir. Le motif technique exact est affiché ci-dessous.',
+  edge_function_failed:
+    'La fonction serveur a répondu par une erreur sans préciser laquelle. Le détail technique est affiché ci-dessous.',
   method_not_allowed: 'Méthode non autorisée.',
   invalid_json: 'Requête malformée.',
 };
@@ -182,24 +187,36 @@ async function invoke<T>(slug: string, body: Record<string, unknown>): Promise<T
   const client = getSupabaseClient();
   const { data, error } = await client.functions.invoke(slug, { body });
   if (error) {
-    // functions.invoke masque le corps de réponse ; on le récupère si possible.
-    const context = (error as { context?: Response }).context;
-    if (context) {
-      const payload = (await context.json().catch(() => null)) as EdgeErrorPayload | null;
-      if (payload?.error) {
-        throw new EdgeFunctionError(payload.error, payload.details ?? null, payload.code ?? null, context.status);
-      }
+    // CORRECTIF (création d'agent impossible) — `error.context` n'est une
+    // `Response` QUE pour une FunctionsHttpError (le serveur a répondu).
+    // Pour une FunctionsFetchError (le navigateur n'a pas obtenu de réponse
+    // lisible : fonction qui ne démarre pas, préflight CORS refusé, coupure
+    // réseau), `context` est l'erreur native de `fetch` : elle n'a pas de
+    // méthode `.json()`. L'ancien code appelait `context.json()` sans vérifier
+    // et levait « context.json is not a function », ce qui remplaçait la vraie
+    // cause par un message inutilisable (code `unknown_error`, sans détail).
+    const context = (error as { context?: unknown }).context;
+    const response = context instanceof Response ? context : null;
+
+    if (response) {
+      const payload = (await response.json().catch(() => null)) as EdgeErrorPayload | null;
+      throw new EdgeFunctionError(
+        payload?.error ?? 'edge_function_failed',
+        payload?.details ?? null,
+        payload?.code ?? null,
+        response.status,
+      );
     }
-    // BLOC 11 : une fonction qui ne démarre pas (module manquant, erreur Deno)
-    // produit une FunctionsHttpError/FunctionsFetchError SANS corps exploitable.
-    // On le dit explicitement au lieu de remonter un objet opaque.
+
+    // Aucune réponse exploitable : on expose le motif réseau réel.
     const name = (error as { name?: string }).name ?? '';
     const raw = (error as { message?: string }).message ?? '';
+    const reason = context instanceof Error && context.message ? context.message : raw;
     throw new EdgeFunctionError(
-      'edge_function_unavailable',
-      raw || `La fonction « ${slug} » n'a pas pu être exécutée.`,
+      'edge_function_unreachable',
+      reason || `La fonction « ${slug} » n'a pas pu être jointe.`,
       name || null,
-      (error as { context?: Response }).context?.status ?? null,
+      null,
     );
   }
   const payload = data as EdgeErrorPayload & T;
@@ -217,7 +234,7 @@ export function createAgencyMember(input: {
   role: TeamRole;
   phone?: string;
 }) {
-  return invoke<CreatedMember>('create-agency-member', {
+  return invoke<CreatedMember>('create-agency-member-v2', {
     agency_id: input.agencyId,
     full_name: input.fullName,
     email: input.email,

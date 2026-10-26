@@ -1,33 +1,29 @@
-// LOT A (point 4) — CRÉATION DIRECTE d'un membre d'agence, SANS SMTP.
-// Remplace la version déployée qui exigeait inviteUserByEmail (donc un SMTP).
+// CREATION DIRECTE d'un membre d'agence, sans SMTP.
 //
-// Différences clés avec la baseline :
-//   - admin.createUser + mot de passe temporaire (au lieu de inviteUserByEmail)
-//   - mot de passe renvoyé UNE SEULE FOIS dans la réponse
-//   - user_metadata.must_change_password = true (changement forcé à la 1re connexion)
-//   - contrôle explicite : agence non suspendue + places disponibles
-//     (invitations en attente comprises, via agency_seat_availability)
-//   - agency_id jamais cru sur parole : vérifié côté serveur par has_agency_role
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
-// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
-// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
-// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
-// présent dans l'artefact déployé, et la fonction échouait au chargement du
-// module — d'où une création de membre et un lien d'invitation qui ne
-// produisaient rien côté navigateur.
-// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
-// est désormais AUTONOME, sans aucune importation relative.
-// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
-// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+// Cette fonction est le slug "create-agency-member-v2". L'ancien slug
+// "create-agency-member" restait bloque sur un BOOT_ERROR du runtime Supabase
+// ("Function failed to start") : le meme code, redeploye sous ce slug, ne
+// demarrait jamais, alors qu'il demarre sous un slug neuf. Ce n'etait donc pas
+// une erreur de code mais un artefact de deploiement corrompu cote plateforme.
+// La source ci-dessous est volontairement en ASCII pur.
+//
+// SECURITE - verify_jwt est desactive cote plateforme.
+// Le preflight CORS (OPTIONS) ne porte jamais d'en-tete Authorization : la
+// passerelle le rejetait avant d'executer ce code, le navigateur bloquait
+// l'appel, et le client ne recevait qu'un "Failed to send a request to the Edge
+// Function" sans statut ni message. Aucune protection n'est perdue ici :
+// la fonction exige un Bearer, valide le jeton avec auth.getUser() et verifie
+// l'appartenance a l'agence avec has_agency_role().
+import { createClient } from 'npm:@supabase/supabase-js@2'
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
+function json(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   })
@@ -36,7 +32,7 @@ function json(body: unknown, status = 200) {
 const allowedRoles = new Set(['admin', 'agent'])
 const MIN_PASSWORD_LENGTH = 8
 
-function generateTempPassword(): string {
+function generateTempPassword() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
   const bytes = new Uint8Array(12)
   crypto.getRandomValues(bytes)
@@ -65,7 +61,6 @@ Deno.serve(async (request) => {
   const email = String(body.email ?? '').trim().toLowerCase()
   const role = String(body.role ?? '').trim().toLowerCase()
   const phone = String(body.phone ?? '').trim() || undefined
-  // Mot de passe temporaire optionnel : fourni par le propriétaire, sinon généré.
   const tempPassword = typeof body.temp_password === 'string' ? body.temp_password : generateTempPassword()
 
   if (!agencyId || !fullName || !email || !role) {
@@ -82,12 +77,12 @@ Deno.serve(async (request) => {
   })
   const admin = createClient(url, service, { auth: { persistSession: false } })
 
-  // 1. Appelant authentifié
+  // 1. Appelant authentifie
   const { data: callerData, error: callerError } = await callerClient.auth.getUser()
   const caller = callerData.user
   if (callerError || !caller) return json({ error: 'authentication_required' }, 401)
 
-  // 2. Propriétaire ou administrateur de CETTE agence (le JWT fait foi, pas le body)
+  // 2. Proprietaire ou administrateur de CETTE agence (le JWT fait foi)
   const { data: allowed, error: allowedError } = await callerClient.rpc('has_agency_role', {
     target_agency_id: agencyId,
     required_role: 'admin',
@@ -96,20 +91,14 @@ Deno.serve(async (request) => {
     return json({ error: 'agency_admin_or_owner_required', details: allowedError?.message ?? null }, 403)
   }
 
-  // 3. Agence non suspendue
-  // BLOC 11 : l'erreur RPC exacte est desormais renvoyee dans `details`, pour ne
-  // plus jamais confondre « agence suspendue » et « appel technique en echec ».
-  // BLOC 10 : `agence_active` attend `p_agency_id` (et non `agency_id`), et
-  // PostgREST résout le RPC dans `public` — d'où le wrapper public.agence_active.
-  // Avec l'ancien nom de paramètre l'appel échouait toujours et la fonction
-  // renvoyait `agency_suspended` pour TOUTE agence, même active.
+  // 3. Agence non suspendue (RPC public.agence_active attend p_agency_id)
   const { data: active, error: activeError } = await callerClient.rpc('agence_active', { p_agency_id: agencyId })
   if (activeError) {
     return json({ error: 'agency_status_check_failed', details: activeError.message, code: activeError.code ?? null }, 500)
   }
   if (active !== true) return json({ error: 'agency_suspended' }, 403)
 
-  // 4. Limite d'utilisateurs non atteinte (membres actifs + invitations en attente)
+  // 4. Limite de places (membres actifs + invitations en attente)
   const { data: seats, error: seatsError } = await callerClient.rpc('agency_seat_availability', {
     p_agency_id: agencyId,
   })
@@ -123,15 +112,15 @@ Deno.serve(async (request) => {
     }, 409)
   }
 
-  // 5. Création du compte auth avec mot de passe temporaire
+  // 5. Compte Auth avec mot de passe temporaire (pas de SMTP)
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
     password: tempPassword,
-    email_confirm: true,          // pas de SMTP : le compte est utilisable tout de suite
+    email_confirm: true,
     user_metadata: {
       full_name: fullName,
       phone,
-      must_change_password: true,  // changement forcé à la première connexion
+      must_change_password: true,
     },
   })
   if (createError || !created.user?.id) {
@@ -139,11 +128,11 @@ Deno.serve(async (request) => {
     const taken = message.includes('already') || message.includes('registered') || message.includes('exists')
     return json({
       error: taken ? 'email_already_exists' : 'auth_user_creation_failed',
-      details: createError?.message ?? 'aucun utilisateur renvoyé',
+      details: createError?.message ?? 'no user returned',
     }, taken ? 409 : 502)
   }
 
-  // 6. Rattachement à l'agence — UNIQUEMENT cette agence
+  // 6. Rattachement a l'agence - UNIQUEMENT cette agence
   const { data: membership, error: membershipError } = await admin.rpc('create_agency_member', {
     p_actor_user_id: caller.id,
     p_agency_id: agencyId,
@@ -157,25 +146,15 @@ Deno.serve(async (request) => {
       message: membershipError.message,
       compensation_failed: Boolean(compensationError),
     })
-    const limit = membershipError.message?.includes('Limite') || membershipError.message?.includes('limite')
     return json({
-      error: limit ? 'member_limit_reached' : 'agency_member_provisioning_failed',
+      error: 'agency_member_provisioning_failed',
       details: membershipError.message,
       code: membershipError.code ?? null,
-    }, limit ? 409 : 500)
+    }, 500)
   }
 
-  // ---------------------------------------------------------------------------
-  // 7. CORRECTIFS APRÈS RATTACHEMENT RÉUSSI (création directe d'un agent)
-  // ---------------------------------------------------------------------------
-  // a. STATUT DU MEMBRE.
-  //    `public.create_agency_member` insère la ligne avec status = 'invited'.
-  //    Or `public.is_agency_member` ET `public.has_agency_role` n'acceptent que
-  //    status = 'active'. L'agent pouvait donc se connecter mais son espace
-  //    restait vide (« Aucune agence active associée »).
-  //    La création directe par le propriétaire vaut accès immédiat : on active.
-  //    La fonction SQL n'est PAS modifiée (accord préalable requis) : le flux
-  //    d'invitation par lien utilise sa propre fonction et garde 'invited'.
+  // 7a. Le statut par defaut est 'invited' : is_agency_member et has_agency_role
+  //     n'acceptent que 'active'. Une creation directe vaut acces immediat.
   const { data: activatedRows, error: activateError } = await admin
     .schema('saas_immobilier')
     .from('agency_members')
@@ -185,25 +164,20 @@ Deno.serve(async (request) => {
     .select('id')
 
   if (activateError || !activatedRows || activatedRows.length === 0) {
-    // Compensation : pas de compte orphelin à moitié rattaché.
     const { error: compensationError } = await admin.auth.admin.deleteUser(created.user.id)
     console.error('agency_member_activation_failed', {
-      message: activateError?.message ?? 'aucune ligne mise à jour',
+      message: activateError?.message ?? 'no row updated',
       compensation_failed: Boolean(compensationError),
     })
     return json({
       error: 'agency_member_activation_failed',
-      details: activateError?.message ?? 'la ligne agency_members n a pas pu etre activee',
+      details: activateError?.message ?? 'agency_members row could not be activated',
       code: activateError?.code ?? null,
     }, 500)
   }
 
-  // b. DRAPEAU must_change_password DANS user_profiles.
-  //    Le trigger `handle_new_user_profile` crée bien la ligne (email, nom,
-  //    téléphone) mais avec la valeur par défaut `false` : la page « changement
-  //    obligatoire » ne s'affichait donc jamais, alors que les métadonnées Auth
-  //    portaient déjà must_change_password = true.
-  //    → On vérifie la ligne, on la met à jour ; si elle n'existe pas, on l'insère.
+  // 7b. Drapeau must_change_password dans user_profiles (lu par App.tsx).
+  //     Le trigger handle_new_user_profile cree la ligne avec la valeur false.
   const profilePayload: Record<string, unknown> = {
     must_change_password: true,
     email,
@@ -219,7 +193,7 @@ Deno.serve(async (request) => {
 
   let profileAction = 'updated'
   if (!profileError && (!profileRows || profileRows.length === 0)) {
-    // La ligne n'a pas été créée par le trigger : on l'insère.
+    // La ligne n'a pas ete creee par le trigger : on l'insere.
     const { error: insertError } = await admin
       .schema('saas_immobilier')
       .from('user_profiles')
@@ -242,7 +216,7 @@ Deno.serve(async (request) => {
     }, 500)
   }
 
-  // Le mot de passe temporaire n'est renvoyé qu'ici, une seule fois.
+  // Le mot de passe temporaire n'est renvoye qu'ici, une seule fois.
   return json({
     membership: Array.isArray(membership) ? membership[0] : membership,
     membership_status: 'active',
