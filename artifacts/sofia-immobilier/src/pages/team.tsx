@@ -148,6 +148,8 @@ export default function TeamPage() {
   const [role, setRole] = useState<TeamRole>('agent');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  // Ton du message : plus de détection par mots-clés dans la phrase affichée.
+  const [messageTone, setMessageTone] = useState<'info' | 'error'>('info');
   // BLOC 1 (session 3) : diagnostic exact (étape + code + message) en cas d'échec.
   const [diagnostic, setDiagnostic] = useState<ReturnType<typeof teamErrorDiagnostic> | null>(null);
   const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null);
@@ -184,9 +186,13 @@ export default function TeamPage() {
       setCreated({ email: result.invited_email, tempPassword: result.temp_password });
       setFullName('');
       setEmail('');
+      setMessageTone('info');
       setMessage('Membre créé. Transmettez le mot de passe temporaire : il ne sera plus affiché.');
       await refresh();
     } catch (error) {
+      // (c) Le message complet de teamErrorLabel est affiché tel quel :
+      // libellé français + détail serveur + code + HTTP. Rien n'est masqué.
+      setMessageTone('error');
       setMessage(teamErrorLabel(error));
       setDiagnostic(teamErrorDiagnostic(error, 'création directe du compte agent'));
     } finally {
@@ -203,9 +209,11 @@ export default function TeamPage() {
     try {
       const result = await createAgencyInvitation({ agencyId: activeAgencyId, role: invitingRole });
       setInvitation(result);
+      setMessageTone('info');
       setMessage('Lien d’invitation créé. Partagez-le : il ne sera plus affiché.');
       await refresh();
     } catch (error) {
+      setMessageTone('error');
       setMessage(teamErrorLabel(error));
       setDiagnostic(teamErrorDiagnostic(error, 'génération du lien d’invitation'));
     } finally {
@@ -219,8 +227,10 @@ export default function TeamPage() {
     setMessage('');
     try {
       await setStatus.mutateAsync({ id: member.id, status: next });
+      setMessageTone('info');
       setMessage(next === 'inactive' ? 'Accès désactivé : la place est libérée.' : 'Accès réactivé.');
     } catch (error) {
+      setMessageTone('error');
       setMessage(getSupabaseErrorMessage(error, 'modifier cet accès'));
     }
   };
@@ -240,9 +250,11 @@ export default function TeamPage() {
         tempPassword: result.temp_password,
       });
       setResetTarget(null);
+      setMessageTone('info');
       setMessage('Mot de passe réinitialisé. Transmettez-le : il ne sera plus affiché.');
       await refresh();
     } catch (error) {
+      setMessageTone('error');
       setMessage(teamErrorLabel(error));
       setDiagnostic(teamErrorDiagnostic(error, 'réinitialisation du mot de passe'));
       setResetTarget(null);
@@ -490,7 +502,11 @@ export default function TeamPage() {
       )}
 
       {message && (
-        <p className={message.includes('échoué') || message.includes('atteinte') || message.includes('réservée') || message.includes('incorrect') ? 'form-error' : 'form-feedback'} role="status" data-testid="status-team-message">
+        <p
+          className={messageTone === 'error' ? 'form-error' : 'form-feedback'}
+          role={messageTone === 'error' ? 'alert' : 'status'}
+          data-testid="status-team-message"
+        >
           {message}
         </p>
       )}

@@ -82,6 +82,11 @@ const errorLabels: Record<string, string> = {
   account_creation_failed: 'La création du compte a échoué. Réessayez.',
   invitation_redeem_failed: 'L’activation de l’invitation a échoué. Réessayez.',
   agency_member_provisioning_failed: 'Le rattachement à l’agence a échoué. Réessayez.',
+  // Création directe d'un agent : étapes ajoutées après le rattachement.
+  agency_member_activation_failed:
+    'Le compte a été créé mais son accès à l’agence n’a pas pu être activé. Le compte a été annulé : réessayez.',
+  user_profile_flag_failed:
+    'Le compte a été créé mais le changement de mot de passe obligatoire n’a pas pu être enregistré. Contactez le support avec le détail ci-dessous.',
   invitation_creation_failed: 'La création du lien d’invitation a échoué. Réessayez.',
   seat_check_failed: 'Le contrôle des places disponibles a échoué. Réessayez.',
   server_configuration_error: 'Configuration serveur incomplète. Contactez le support.',

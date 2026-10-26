@@ -165,9 +165,88 @@ Deno.serve(async (request) => {
     }, limit ? 409 : 500)
   }
 
+  // ---------------------------------------------------------------------------
+  // 7. CORRECTIFS APRÈS RATTACHEMENT RÉUSSI (création directe d'un agent)
+  // ---------------------------------------------------------------------------
+  // a. STATUT DU MEMBRE.
+  //    `public.create_agency_member` insère la ligne avec status = 'invited'.
+  //    Or `public.is_agency_member` ET `public.has_agency_role` n'acceptent que
+  //    status = 'active'. L'agent pouvait donc se connecter mais son espace
+  //    restait vide (« Aucune agence active associée »).
+  //    La création directe par le propriétaire vaut accès immédiat : on active.
+  //    La fonction SQL n'est PAS modifiée (accord préalable requis) : le flux
+  //    d'invitation par lien utilise sa propre fonction et garde 'invited'.
+  const { data: activatedRows, error: activateError } = await admin
+    .schema('saas_immobilier')
+    .from('agency_members')
+    .update({ status: 'active' })
+    .eq('agency_id', agencyId)
+    .eq('user_id', created.user.id)
+    .select('id')
+
+  if (activateError || !activatedRows || activatedRows.length === 0) {
+    // Compensation : pas de compte orphelin à moitié rattaché.
+    const { error: compensationError } = await admin.auth.admin.deleteUser(created.user.id)
+    console.error('agency_member_activation_failed', {
+      message: activateError?.message ?? 'aucune ligne mise à jour',
+      compensation_failed: Boolean(compensationError),
+    })
+    return json({
+      error: 'agency_member_activation_failed',
+      details: activateError?.message ?? 'la ligne agency_members n a pas pu etre activee',
+      code: activateError?.code ?? null,
+    }, 500)
+  }
+
+  // b. DRAPEAU must_change_password DANS user_profiles.
+  //    Le trigger `handle_new_user_profile` crée bien la ligne (email, nom,
+  //    téléphone) mais avec la valeur par défaut `false` : la page « changement
+  //    obligatoire » ne s'affichait donc jamais, alors que les métadonnées Auth
+  //    portaient déjà must_change_password = true.
+  //    → On vérifie la ligne, on la met à jour ; si elle n'existe pas, on l'insère.
+  const profilePayload: Record<string, unknown> = {
+    must_change_password: true,
+    email,
+    full_name: fullName,
+  }
+  if (phone) profilePayload.phone = phone
+
+  const profiles = admin.schema('saas_immobilier').from('user_profiles')
+  const { data: profileRows, error: profileError } = await profiles
+    .update(profilePayload)
+    .eq('id', created.user.id)
+    .select('id')
+
+  let profileAction = 'updated'
+  if (!profileError && (!profileRows || profileRows.length === 0)) {
+    // La ligne n'a pas été créée par le trigger : on l'insère.
+    const { error: insertError } = await admin
+      .schema('saas_immobilier')
+      .from('user_profiles')
+      .insert({ id: created.user.id, role: 'agency', ...profilePayload })
+    if (insertError) {
+      console.error('user_profile_flag_failed', { message: insertError.message, code: insertError.code })
+      return json({
+        error: 'user_profile_flag_failed',
+        details: insertError.message,
+        code: insertError.code ?? null,
+      }, 500)
+    }
+    profileAction = 'inserted'
+  } else if (profileError) {
+    console.error('user_profile_flag_failed', { message: profileError.message, code: profileError.code })
+    return json({
+      error: 'user_profile_flag_failed',
+      details: profileError.message,
+      code: profileError.code ?? null,
+    }, 500)
+  }
+
   // Le mot de passe temporaire n'est renvoyé qu'ici, une seule fois.
   return json({
     membership: Array.isArray(membership) ? membership[0] : membership,
+    membership_status: 'active',
+    user_profile: profileAction,
     invited_email: email,
     temp_password: tempPassword,
     must_change_password: true,
