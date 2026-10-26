@@ -104,7 +104,16 @@ Deno.serve(async (request) => {
 
   // 5. Generation du jeton COTE BASE (hache sha256, usage unique, 48 h).
   //    La base applique elle-meme la limite de places : double verrou.
-  const { data: invitation, error: invitationError } = await admin.rpc('create_agency_invitation', {
+  //
+  //    IMPORTANT : appel avec `callerClient` (JWT de l'appelant), PAS avec
+  //    `admin`. `public.create_agency_invitation` exige `auth.uid()`
+  //    (42501 « authentification requise » sinon) et enregistre `invited_by`.
+  //    Avec le client service_role il n'y a pas de session : l'appel echouait
+  //    systematiquement en 500 `invitation_creation_failed`.
+  //    La fonction est SECURITY DEFINER et revalide elle-meme
+  //    `has_agency_role(p_agency_id, 'admin')` : aucun privilege n'est accorde
+  //    a l'appelant par ce changement.
+  const { data: invitation, error: invitationError } = await callerClient.rpc('create_agency_invitation', {
     p_agency_id: agencyId,
     p_role: role,
   })
