@@ -21,9 +21,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  ComposedChart,
   LabelList,
-  Line,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -517,11 +515,9 @@ function operationTone(label: string): string {
 
 type RevenueTooltipRow = {
   mensualite: number | null;
-  encaisse: number;
-  paiements: number;
 };
 
-/** Infobulle du graphique : mensualité par offre et encaissé du mois. */
+/** Infobulle du graphique : mensualité du mois, détaillée par offre. */
 function RevenueTooltip({
   active,
   label,
@@ -557,8 +553,6 @@ function RevenueTooltip({
         Mensualité :{' '}
         <strong>{row?.mensualite === null || row?.mensualite === undefined ? 'non conservée' : cash(Number(row.mensualite), 'XOF')}</strong>
       </p>
-      <p>Encaissé : <strong>{cash(Number(row?.encaisse ?? 0), 'XOF')}</strong></p>
-      <p>{row?.paiements ?? 0} paiement(s) validé(s)</p>
     </div>
   );
 }
@@ -612,8 +606,6 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         key: month.month_start,
         label: monthShortLabel(month.month_start),
         mensualite: month.mensualite_total === null ? null : Number(month.mensualite_total),
-        encaisse: Number(month.encaisse ?? 0),
-        paiements: Number(month.payments_count ?? 0),
         ...Object.fromEntries(
           Object.entries(month.mensualite_par_offre ?? {}).map(([code, amount]) => [`plan_${code}`, Number(amount)]),
         ),
@@ -633,7 +625,6 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
   const planColor = (index: number) => `var(--si-chart-${(index % 5) + 1})`;
 
   const mensualite = Number(totals?.mensualite_total ?? 0);
-  const encaisse = Number(totals?.encaisse ?? 0);
   const facturesAttente = Number(totals?.factures_en_attente_montant ?? 0);
   const nbFactures = Number(totals?.factures_en_attente_nombre ?? 0);
 
@@ -662,7 +653,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     validatePayment.mutate(
       { agencyId: agency.id, planId, amount, note: 'Paiement validé par administrateur' },
       {
-        onSuccess: () => setNotice(`Paiement de ${cash(amount, 'XOF')} validé pour ${agency.name}. L’encaissé est à jour.`),
+        onSuccess: () => setNotice(`Paiement de ${cash(amount, 'XOF')} validé pour ${agency.name}.`),
         onError: (error) => setPageError(getSupabaseErrorMessage(error, 'valider le paiement')),
       },
     );
@@ -676,7 +667,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
     validatePayment.mutate(
       { agencyId: invoice.agency_id, amount, invoiceId, note: `Règlement de la facture ${invoice.reference ?? invoiceId}` },
       {
-        onSuccess: () => setNotice(`Facture de ${cash(amount, 'XOF')} réglée pour ${agencyName}. L’encaissé est à jour.`),
+        onSuccess: () => setNotice(`Facture de ${cash(amount, 'XOF')} réglée pour ${agencyName}.`),
         onError: (error) => setPageError(getSupabaseErrorMessage(error, 'régler la facture')),
       },
     );
@@ -731,7 +722,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         <div className="panel-head">
           <div>
             <h2>Abonnements</h2>
-            <p>Mensualité, encaissé et factures — calculés en base, jamais dans le navigateur</p>
+            <p>Mensualité et factures — calculées en base, jamais dans le navigateur</p>
           </div>
           <div className="revenue-toolbar revenue-period-select" role="group" aria-label="Période des abonnements">
             {([6, 12] as const).map((value) => (
@@ -746,20 +737,10 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
             <strong className="kpi-value">{cash(mensualite, 'XOF')}</strong>
             <span className="kpi-foot">Somme des offres de {totals?.agences_actives ?? 0} agence(s) active(s)</span>
           </article>
-          <article className="kpi-card" data-testid="kpi-abo-encaisse">
-            <span className="kpi-label">Encaissé</span>
-            <strong className="kpi-value">{cash(encaisse, 'XOF')}</strong>
-            <span className="kpi-foot">
-              {totals?.paiements_valides ?? 0} paiement(s) validé(s)
-              {Number(totals?.ecritures_contraires ?? 0) > 0
-                ? ` · ${cash(Number(totals?.ecritures_contraires), 'XOF')} annulés`
-                : ''}
-            </span>
-          </article>
           <article className={`kpi-card${nbFactures > 0 ? ' kpi-card-alert' : ''}`} data-testid="kpi-abo-factures">
             <span className="kpi-label">Factures en attente</span>
             <strong className={`kpi-value${nbFactures > 0 ? ' kpi-value-alert' : ''}`}>{cash(facturesAttente, 'XOF')}</strong>
-            <span className="kpi-foot">{nbFactures} facture(s) à encaisser</span>
+            <span className="kpi-foot">{nbFactures} facture(s) en attente</span>
           </article>
           <article className="kpi-card" data-testid="kpi-abo-agences-actives">
             <span className="kpi-label">Agences actives</span>
@@ -771,10 +752,10 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         {notice && <p className="form-feedback" role="status" data-testid="status-paiement-notice">{notice}</p>}
         {pageError && <p className="form-error" role="alert" data-testid="status-paiement-error">{pageError}</p>}
 
-        {chartData.some((row) => row.encaisse > 0 || (row.mensualite ?? 0) > 0) ? (
+        {chartData.some((row) => (row.mensualite ?? 0) > 0) ? (
           <div className="chart-box" data-testid="chart-abonnements">
             <ResponsiveContainer width="100%" height={264}>
-              <ComposedChart data={chartData} margin={{ top: 22, right: 6, left: -8, bottom: 0 }}>
+              <BarChart data={chartData} margin={{ top: 22, right: 6, left: -8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--si-chart-grid)" vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} tick={{ fill: 'var(--si-chart-axis)' }} />
                 <YAxis yAxisId="left" tickLine={false} axisLine={false} fontSize={10} tickFormatter={(value: number) => compact(Number(value))} width={54} tick={{ fill: 'var(--si-chart-axis)' }} />
@@ -794,20 +775,18 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
                     ) : null}
                   </Bar>
                 ))}
-                <Line yAxisId="left" type="monotone" dataKey="encaisse" stroke="var(--si-chart-4)" strokeWidth={2.4} dot={{ r: 3 }} name="Encaissé" />
-              </ComposedChart>
+              </BarChart>
             </ResponsiveContainer>
             <p className="chart-caption">
               Barres empilées : mensualité par offre. La mensualité est une mesure instantanée : elle n’est
-              connue que pour le mois en cours, l’historique des offres n’étant pas conservé. Courbe : encaissé
-              réel de chaque mois. Les deux mesures ne se comparent pas terme à terme.
+              connue que pour le mois en cours, l’historique des offres n’étant pas conservé.
             </p>
           </div>
         ) : (
           <div className="empty-table" data-testid="empty-abonnements-chart">
             <div className="empty-table-mark"><TrendingUp size={17} /></div>
             <strong>Aucune activité sur la période</strong>
-            <p>Les montants apparaissent dès la première activation ou le premier paiement validé.</p>
+            <p>Les montants apparaissent dès la première activation d’agence.</p>
           </div>
         )}
 
@@ -815,7 +794,7 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
           <>
             <div className="panel-subhead">
               <h3>Factures en attente</h3>
-              <p>Montant dû sur changement d’offre. Hors encaissé tant qu’un paiement n’est pas validé.</p>
+              <p>Montant dû au prorata de la nouvelle offre, calculé sur sa mensualité.</p>
             </div>
             <div className="table-wrap">
               <table className="data-table" data-testid="table-factures-attente">
