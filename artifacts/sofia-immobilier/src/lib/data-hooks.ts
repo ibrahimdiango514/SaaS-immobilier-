@@ -201,7 +201,7 @@ export type PlatformSummary = {
 };
 
 const AGENCY_COLUMNS =
-  'id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, logo_url, description, commission_rate, rental_commission_rate, created_at, updated_at';
+  'id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, logo_url, description, commission_rate, rental_commission_rate, created_at, updated_at, suspended_at, suspended_reason, auto_suspend_disabled_until, pending_note';
 
 export type ProfileUpdateInput = Partial<Pick<UserProfileRow, 'full_name' | 'phone'>>;
 export type PropertyMediaPreview = PropertyMediaRow & {
@@ -1776,36 +1776,143 @@ export function usePlatformSummary() {
 export type AgencyAdminActionInput = {
   agencyId: string;
   status: string;
+  /** Statut AVANT l'action : seul moyen de distinguer une réactivation
+   *  (agence suspendue) d'une activation d'offre (agence en attente). */
+  currentStatus?: string;
+  reason?: string;
   subscriptionStatus?: string;
 };
 
+export type AgencyAdminActionResult = {
+  action: 'suspended' | 'reactivated' | 'activated' | 'unchanged';
+  status: string;
+  agency?: AgencyRow | null;
+  /** Message de confirmation calculé à partir de la RÉPONSE DU SERVEUR. */
+  message: string;
+  /** Vrai quand la suspension est levée mais que l'abonnement est expiré. */
+  featuresLimited?: boolean;
+  subscriptionEndsAt?: string | null;
+};
+
+/**
+ * Suspension / réactivation / activation d'une agence.
+ *
+ * CAUSE RACINE CORRIGÉE (2026-10-28) — la réactivation ne fonctionnait pas :
+ *   · « Suspendre » faisait un UPDATE direct de `agencies.status` depuis le
+ *     navigateur (aucun journal, aucun `suspended_at`, aucune trace) ;
+ *   · « Réactiver » appelait `admin_activate_agency_journaled` →
+ *     `admin_assign_plan`, qui ne remet `status = 'active'` que depuis
+ *     `pending`. Une agence suspendue RESTAIT donc suspendue, alors que
+ *     l'interface annonçait un succès.
+ *
+ * Désormais chaque intention passe par SA fonction serveur :
+ *   · suspendre        → `public.admin_suspend_agency`        (journalisée)
+ *   · réactiver        → `public.admin_reactivate_agency`     (lève la seule
+ *                        suspension, ne touche pas à l'abonnement)
+ *   · activer (pending) → `public.admin_activate_agency_journaled`
+ * Le retour du serveur est relu en base : l'interface n'affiche jamais un
+ * succès que la base n'a pas enregistré.
+ */
 export function useAdminUpdateAgency() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ agencyId, status, subscriptionStatus }: AgencyAdminActionInput) => {
-      // BLOC 1 (session 3) — CAUSE RACINE n°1 CORRIGÉE.
-      // Avant : un UPDATE direct de `agencies.status` quand on cliquait
-      // « Activer ». Résultat : l'agence passait 'active' SANS aucune ligne
-      // `agency_subscriptions`, donc `agency_current_plan()` ne renvoyait rien
-      // et la vue d'ensemble se verrouillait (« offre non reconnue »).
-      // Désormais l'activation passe par la SEULE fonction qui écrit l'offre :
-      // `public.admin_activate_agency`, qui crée l'abonnement au besoin.
+    mutationFn: async ({
+      agencyId,
+      status,
+      currentStatus,
+      reason,
+    }: AgencyAdminActionInput): Promise<AgencyAdminActionResult> => {
+      const readAgency = async (): Promise<AgencyRow | null> => {
+        const { data, error } = await db()
+          .from('agencies')
+          .select(AGENCY_COLUMNS)
+          .eq('id', agencyId)
+          .maybeSingle();
+        if (error) throw error;
+        return (data as AgencyRow | null) ?? null;
+      };
+
+      if (status === 'suspended') {
+        const { data, error } = await rpcClient().rpc('admin_suspend_agency', {
+          p_agency_id: agencyId,
+          p_reason: reason ?? null,
+        });
+        if (error) throw error;
+        const payload = (data ?? {}) as { already_suspended?: boolean };
+        const refreshed = await readAgency();
+        if (refreshed && refreshed.status !== 'suspended') {
+          throw new Error(
+            'Le serveur n’a pas enregistré la suspension (statut relu : ' +
+              refreshed.status +
+              '). Rechargez la page avant de réessayer.',
+          );
+        }
+        return {
+          action: payload.already_suspended ? 'unchanged' : 'suspended',
+          status: 'suspended',
+          agency: refreshed,
+          message: payload.already_suspended
+            ? 'Cette agence était déjà suspendue : aucune modification.'
+            : 'Agence suspendue. Son accès est coupé, ses données et son abonnement sont conservés.',
+        };
+      }
+
+      if (status === 'active' && currentStatus === 'suspended') {
+        const { data, error } = await rpcClient().rpc('admin_reactivate_agency', {
+          p_agency_id: agencyId,
+          p_reason: reason ?? null,
+        });
+        if (error) throw error;
+        const payload = (data ?? {}) as {
+          already_active?: boolean;
+          subscription_expired?: boolean;
+          features_limited?: boolean;
+          subscription_ends_at?: string | null;
+        };
+        const refreshed = await readAgency();
+        if (refreshed && refreshed.status !== 'active') {
+          throw new Error(
+            'Le serveur n’a pas enregistré la réactivation (statut relu : ' +
+              refreshed.status +
+              '). Rechargez la page avant de réessayer.',
+          );
+        }
+        const limited = Boolean(payload.features_limited || payload.subscription_expired);
+        return {
+          action: payload.already_active ? 'unchanged' : 'reactivated',
+          status: 'active',
+          agency: refreshed,
+          featuresLimited: limited,
+          subscriptionEndsAt: payload.subscription_ends_at ?? null,
+          message: payload.already_active
+            ? 'Cette agence n’était pas suspendue : aucune modification.'
+            : limited
+              ? 'Suspension levée : l’agence retrouve l’accès. Son abonnement reste expiré — les fonctions payantes demeurent limitées, aucun abonnement n’a été offert.'
+              : 'Suspension levée : l’agence retrouve son espace, son offre en cours et toutes ses données.',
+        };
+      }
+
       if (status === 'active') {
-        // Session 5 : passage par la version journalisee. admin_activate_agency reste
-        // la primitive interne cote base ; l'appeler directement ne journalisait rien.
+        // Agence en attente (ou sans offre) : c'est bien une activation d'offre.
         const { error: activateError } = await rpcClient().rpc('admin_activate_agency_journaled', {
           p_agency_id: agencyId,
         });
         if (activateError) throw activateError;
-        const { data: refreshed, error: readError } = await db()
-          .from('agencies')
-          .select(AGENCY_COLUMNS)
-          .eq('id', agencyId)
-          .single();
-        if (readError) throw readError;
-        return refreshed;
+        const refreshed = await readAgency();
+        if (refreshed && refreshed.status === 'suspended') {
+          throw new Error(
+            'L’agence est toujours suspendue après l’activation. Utilisez « Réactiver ».',
+          );
+        }
+        return {
+          action: 'activated',
+          status: refreshed?.status ?? 'active',
+          agency: refreshed,
+          message: 'Offre activée : l’agence peut ouvrir son espace.',
+        };
       }
 
+      // Autres transitions de statut (aucune autre n'est exposée par l'UI).
       const { data, error } = await db()
         .from('agencies')
         .update({ status })
@@ -1813,14 +1920,12 @@ export function useAdminUpdateAgency() {
         .select(AGENCY_COLUMNS)
         .single();
       if (error) throw error;
-      if (subscriptionStatus) {
-        const { error: subError } = await db()
-          .from('agency_subscriptions')
-          .update({ status: subscriptionStatus })
-          .eq('agency_id', agencyId);
-        if (subError) throw subError;
-      }
-      return data;
+      return {
+        action: 'unchanged',
+        status: (data as AgencyRow).status,
+        agency: data as AgencyRow,
+        message: 'Statut mis à jour.',
+      };
     },
     onSuccess: async () => {
       // BLOC 1 (session 3) — CAUSE RACINE n°3 CORRIGÉE.
@@ -1842,6 +1947,11 @@ export function useAdminUpdateAgency() {
         queryClient.invalidateQueries({ queryKey: ['admin', 'subscription-revenue'] }),
         queryClient.invalidateQueries({ queryKey: ['billing'] }),
         queryClient.invalidateQueries({ queryKey: ['sofia', 'agencies'] }),
+        // L'état de compte décide du blocage de connexion : il doit être relu
+        // immédiatement après une suspension ou une réactivation, sinon
+        // l'interface garde un état bloqué périmé.
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'account-state'] }),
+        queryClient.invalidateQueries({ queryKey: ['plan', 'etat'] }),
       ]);
     },
   });

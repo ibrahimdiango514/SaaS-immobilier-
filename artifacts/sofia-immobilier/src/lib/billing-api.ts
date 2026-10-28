@@ -464,6 +464,44 @@ function proofFileName(name: string) {
   );
 }
 
+/** Normalisation identique à celle du serveur (`transaction_reference_norm`). */
+const normalizeTransactionReference = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/**
+ * Relit la demande après un échec de `agency_submit_payment_proof` : si elle
+ * est déjà « pending » avec la même référence de transaction, la soumission a
+ * bien eu lieu (double clic) et il n'y a rien à recréer.
+ */
+async function readSubmittedState(
+  input: ProofInput,
+  agencyId?: string,
+): Promise<{
+  id: string;
+  reference: string;
+  status: PaymentRequestStatus;
+  amount: number;
+  currency: string;
+  has_proof: boolean;
+} | null> {
+  if (!agencyId) return null;
+  const { data, error } = await rpc().rpc('agency_payment_access', { p_agency_id: agencyId });
+  if (error || !data) return null;
+  const requests = ((data as AgencyBilling).requests ?? []) as PaymentRequestRow[];
+  const row = requests.find((item) => item.id === input.requestId);
+  if (!row || row.status !== 'pending' || !row.transaction_reference) return null;
+  if (normalizeTransactionReference(row.transaction_reference) !== normalizeTransactionReference(input.transactionReference)) {
+    return null;
+  }
+  return {
+    id: row.id,
+    reference: row.reference ?? '',
+    status: row.status,
+    amount: Number(row.amount ?? input.amount),
+    currency: row.currency,
+    has_proof: Boolean(row.has_proof),
+  };
+}
+
 export function useSubmitPaymentProof(agencyId?: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -515,6 +553,20 @@ export function useSubmitPaymentProof(agencyId?: string) {
       });
 
       if (error) {
+        // DOUBLE CLIC / REJEU RÉSEAU : la demande est peut-être déjà passée
+        // « pending » par l'appel précédent (le serveur refuse alors toute
+        // nouvelle preuve). On relit l'état réel : si la même référence de
+        // transaction est enregistrée sur cette demande, c'est un succès —
+        // aucune duplication n'est créée, et l'agence voit sa confirmation au
+        // lieu d'une erreur incompréhensible.
+        const already = await readSubmittedState(input, agencyId);
+        if (already) {
+          if (proofPath) {
+            // La pièce du second envoi est inutile : la preuve d'origine fait foi.
+            await client.storage.from(PAYMENT_PROOFS_BUCKET).remove([proofPath]).catch(() => undefined);
+          }
+          return { ...already, already_submitted: true };
+        }
         // Compensation : aucune pièce orpheline dans le stockage privé.
         if (proofPath) {
           await client.storage.from(PAYMENT_PROOFS_BUCKET).remove([proofPath]).catch(() => undefined);

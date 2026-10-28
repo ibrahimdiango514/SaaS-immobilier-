@@ -11,7 +11,7 @@
 // l'écran en lecture seule.
 // =============================================================================
 import { useEffect, useMemo, useState } from 'react';
-import { Info, KeyRound, LockKeyhole, Phone, Save, ShieldCheck, Sparkles, Timer } from 'lucide-react';
+import { AlertTriangle, Info, KeyRound, LockKeyhole, Phone, Save, ShieldCheck, Sparkles, Timer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -220,6 +220,30 @@ export default function AdminSettingsPage() {
           {configQ.error && (
             <p className="form-error" role="alert" data-testid="status-payment-config-error">
               {getSupabaseErrorMessage(configQ.error, 'charger la configuration des paiements')}
+            </p>
+          )}
+
+          {configQ.data && !configQ.data.any_configured && (
+            <div className="notice-box is-warning" role="alert" data-testid="status-payment-config-missing-settings">
+              <AlertTriangle size={15} />
+              <span>
+                <strong>Aucun moyen de paiement publié.</strong> Toutes les agences
+                sont bloquées à l’écran d’instructions : elles voient « moyen de
+                paiement en cours de configuration » et ne peuvent pas transmettre
+                de preuve. Renseignez le bénéficiaire et le numéro réel d’au moins
+                un service ci-dessous, puis activez-le.
+              </span>
+            </div>
+          )}
+
+          {configQ.data && configQ.data.any_configured && (
+            <p className="form-hint" data-testid="status-payment-config-ready">
+              Moyens publiés et utilisables :{' '}
+              {['orange_money', 'moov_money', 'wave']
+                .filter((code) => configQ.data?.methods?.[code as PaymentMethodCode]?.configured)
+                .map((code) => METHOD_LABELS[code] ?? code)
+                .join(', ')}
+              .
             </p>
           )}
 

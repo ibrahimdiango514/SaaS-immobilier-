@@ -12,7 +12,8 @@
 // public.admin_review_payment (SECURITY DEFINER, transaction unique).
 // Ce fichier ne décide de rien : il affiche et déclenche.
 // =============================================================================
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearch } from 'wouter';
 import {
   AlertTriangle, CalendarClock, CheckCircle2, ChevronRight, CreditCard, Eye,
   FileText, Filter, History, Info, Loader2, RefreshCw, Search, ShieldCheck,
@@ -33,7 +34,7 @@ import {
 import { useHandlePlanChange, usePlanChangeRequests, PLAN_CHANGE_LABELS, type PlanChangeRequestRow } from '@/lib/admin-billing-api';
 import {
   METHOD_LABELS, REQUEST_STATUS_TONE, decisionLabel, methodLabel, requestStatusLabel,
-  useAdminPaymentDetail, useAdminPaymentQueue, useProofUrl, useReviewPayment,
+  useAdminPaymentDetail, useAdminPaymentQueue, usePaymentConfig, useProofUrl, useReviewPayment,
   type AdminPaymentDetail, type AdminPaymentRow, type AdminQueueFilters,
   type PaymentDecision, type PaymentRequestStatus,
 } from '@/lib/billing-api';
@@ -787,6 +788,31 @@ export default function AdminBillingPage() {
 
   const agenciesQ = useAllAgencies();
   const planChangesQ = usePlanChangeRequests();
+  const search$ = useSearch();
+
+  // Lien profond depuis une notification/alerte : /admin/paiements?demande=<uuid>
+  // ouvre directement le dossier concerné, sans obliger l'administrateur à le
+  // rechercher dans la file. Le paramètre est retiré après ouverture.
+  useEffect(() => {
+    const params = new URLSearchParams(search$);
+    const demande = params.get('demande');
+    if (!demande) return;
+    setTab('payments');
+    setStatusKey('all');
+    setOpenId(demande);
+    params.delete('demande');
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+    // On ne dépend que du paramètre : ouvrir un dossier ne doit pas relancer
+    // l'effet quand l'administrateur en ferme un autre.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search$]);
+
+  // Configuration réelle des moyens de paiement : si aucun numéro n'est
+  // publié, AUCUNE agence ne peut transmettre de preuve. L'administrateur
+  // doit le voir au-dessus de la file, pas le découvrir dans un ticket.
+  const configQ = usePaymentConfig();
+  const configMissing = configQ.data ? !configQ.data.any_configured : false;
 
   const filters: AdminQueueFilters = useMemo(() => {
     const statuses = STATUS_TABS.find((t) => t.key === statusKey)?.statuses;
@@ -855,6 +881,19 @@ export default function AdminBillingPage() {
           </Button>
         }
       />
+
+      {configMissing && (
+        <div className="notice-box is-warning" role="alert" data-testid="banner-payment-config-missing-admin">
+          <AlertTriangle size={15} />
+          <span>
+            <strong>Aucun moyen de paiement n’est configuré.</strong>{' '}
+            Les agences ne peuvent pas transmettre de preuve : l’écran de paiement
+            s’arrête aux instructions. Renseignez au moins un numéro Orange Money ou
+            Moov Money dans <a href="/admin/reglages">Réglages → Moyens de paiement</a>.
+            Aucun numéro n’est inventé par l’application.
+          </span>
+        </div>
+      )}
 
       <section className="review-queue-summary" aria-label="Files d’attente">
         <button

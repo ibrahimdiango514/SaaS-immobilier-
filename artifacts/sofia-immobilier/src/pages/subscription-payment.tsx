@@ -29,6 +29,37 @@ import {
 
 type Step = 'instructions' | 'proof' | 'done';
 
+/**
+ * Copie robuste : `navigator.clipboard` n'existe qu'en contexte sécurisé et
+ * peut être refusé par le navigateur. On retombe sur `execCommand('copy')`,
+ * puis on signale l'échec au lieu d'afficher un faux « Copiée ».
+ */
+async function copyText(value: string): Promise<boolean> {
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    /* on tente le repli */
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = value;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(area);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 const STEPS: Array<{ key: Step; label: string }> = [
   { key: 'instructions', label: 'Instructions' },
   { key: 'proof', label: 'Preuve de paiement' },
@@ -103,6 +134,7 @@ export default function SubscriptionPaymentPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [receipt, setReceipt] = useState<{ reference: string; status: string } | null>(null);
 
   const row = useMemo(
@@ -265,8 +297,14 @@ export default function SubscriptionPaymentPage() {
               <div className="billing-result-mark is-pending"><Clock3 size={22} /></div>
               <h2 data-testid="status-payment-submitted">En attente de vérification</h2>
               <p>
-                Votre preuve a bien été enregistrée. L’administrateur vérifie la
-                transaction ; l’abonnement sera activé ou prolongé à la validation.
+                Votre preuve a bien été enregistrée sous le dossier{' '}
+                <strong className="mono" data-testid="text-confirmed-dossier">
+                  {receipt?.reference ?? row.reference ?? '—'}
+                </strong>
+                . L’administrateur vérifie la transaction ; l’abonnement ne sera
+                activé ou prolongé qu’à la validation. Ce dossier reste visible dans
+                « Abonnement et facturation » avec le statut « En attente de
+                vérification ».
               </p>
               <div className="billing-summary is-compact">
                 <div>
@@ -357,14 +395,22 @@ export default function SubscriptionPaymentPage() {
                 type="button"
                 className="billing-copy-button"
                 onClick={() => {
-                  void navigator.clipboard?.writeText(row.reference ?? '');
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1800);
+                  void copyText(row.reference ?? '').then((ok) => {
+                    setCopyFailed(!ok);
+                    setCopied(ok);
+                    window.setTimeout(() => setCopied(false), 1800);
+                  });
                 }}
                 data-testid="button-copy-reference"
               >
                 <Copy size={14} /> {copied ? 'Copiée' : 'Copier la référence'}
               </button>
+              {copyFailed && (
+                <small className="form-error" role="alert" data-testid="status-copy-error">
+                  Copie automatique indisponible : sélectionnez la référence affichée
+                  ci-dessus et copiez-la manuellement.
+                </small>
+              )}
             </div>
 
             {row.status === 'correction_requested' && row.review_note && (
@@ -395,8 +441,15 @@ export default function SubscriptionPaymentPage() {
                 <AlertTriangle size={15} />
                 <span>
                   <strong>Moyen de paiement en cours de configuration.</strong>{' '}
-                  Aucun numéro de paiement n’est publié. Vous ne pouvez pas encore
-                  transmettre de preuve : contactez l’administrateur.
+                  Aucun numéro Orange Money / Moov Money n’est publié par la
+                  plateforme : nous n’affichons pas de coordonnées non vérifiées et
+                  vous ne pouvez pas encore transmettre de preuve.
+                </span>
+                <span>
+                  Votre demande <strong className="mono">{row.reference ?? '—'}</strong> et
+                  son montant sont conservés. Prévenez l’administrateur de la plateforme
+                  (« Réglages → Moyens de paiement ») : dès qu’un numéro est publié,
+                  cette page vous permet de continuer, sans recréer la demande.
                 </span>
               </div>
             ) : (
@@ -501,6 +554,26 @@ export default function SubscriptionPaymentPage() {
               </div>
             </div>
 
+            <div className="form-field">
+              <label className="form-label" htmlFor="proof-sofia-reference">
+                Référence de votre demande Sofia (à rappeler dans le transfert)
+              </label>
+              <Input
+                id="proof-sofia-reference"
+                value={row.reference ?? ''}
+                readOnly
+                aria-readonly="true"
+                className="is-readonly mono"
+                data-testid="input-proof-sofia-reference"
+              />
+              <small className="form-hint">
+                Générée par la plateforme et conservée : indiquez-la dans le motif
+                du transfert Mobile Money. Ce n’est pas une référence Mobile Money :
+                Orange Money / Moov Money ne la reconnaissent pas, elle sert à
+                rapprocher votre paiement de cette demande.
+              </small>
+            </div>
+
             <div className="form-grid">
               <div className="form-field">
                 <label className="form-label" htmlFor="proof-amount">
@@ -545,8 +618,10 @@ export default function SubscriptionPaymentPage() {
                 data-testid="input-proof-reference"
               />
               <small className="form-hint">
-                Reçue par SMS après le transfert. Une même référence ne peut valider
-                qu’un seul paiement, toutes agences confondues.
+                C’est la référence du <strong>transfert</strong> (reçue par SMS ou dans
+                l’application Orange Money / Moov Money), différente de la référence
+                Sofia ci-dessus. Une même référence ne peut valider qu’un seul
+                paiement, toutes agences confondues.
               </small>
             </div>
 

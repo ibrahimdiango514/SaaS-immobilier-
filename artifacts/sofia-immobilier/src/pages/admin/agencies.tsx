@@ -73,6 +73,7 @@ export default function AdminAgenciesPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [detail, setDetail] = useState<AgencyRow | null>(null);
   const [pageError, setPageError] = useState('');
+  const [pageSuccess, setPageSuccess] = useState('');
 
   // BLOC 1 : changement d'offre en un clic, via la fonction unique côté base.
   const changePlan = useMutation({
@@ -147,15 +148,34 @@ export default function AdminAgenciesPage() {
     });
   }, [agenciesQ.data?.agencies, agenciesQ.data?.subscriptions, search, statusFilter]);
 
+  /**
+   * Suspension / réactivation : chaque intention part vers SA fonction
+   * serveur (voir `useAdminUpdateAgency`). `currentStatus` est indispensable :
+   * sans lui, une réactivation d'agence suspendue était jouée comme une
+   * activation d'offre — elle ne levait jamais la suspension.
+   * La confirmation n'est affichée qu'APRÈS la réponse du serveur et la
+   * relecture du statut en base.
+   */
   const changeStatus = (agency: AgencyRow, nextStatus: string) => {
     const verb = nextStatus === 'active' ? 'réactiver' : 'suspendre';
     if (!window.confirm(`Confirmer le fait de ${verb} l’agence « ${agency.name} » ?`)) return;
     setPageError('');
+    setPageSuccess('');
     updateAgency.mutate(
-      { agencyId: agency.id, status: nextStatus },
       {
-        onSuccess: () => {
-          if (detail?.id === agency.id) setDetail({ ...detail, status: nextStatus });
+        agencyId: agency.id,
+        status: nextStatus,
+        currentStatus: agency.status,
+        reason: nextStatus === 'suspended'
+          ? 'Suspension administrative depuis la console'
+          : 'Réactivation administrative depuis la console',
+      },
+      {
+        onSuccess: (result) => {
+          setPageSuccess(result.message);
+          if (result.agency) {
+            setDetail((current) => (current && current.id === agency.id ? result.agency ?? current : current));
+          }
         },
         onError: (error) => setPageError(getSupabaseErrorMessage(error, `${verb} l’agence`)),
       },
@@ -216,7 +236,8 @@ export default function AdminAgenciesPage() {
         }
       />
 
-      {pageError && <p className="form-error module-error" role="alert">{pageError}</p>}
+      {pageError && <p className="form-error module-error" role="alert" data-testid="status-agency-action-error">{pageError}</p>}
+      {pageSuccess && <p className="form-note" role="status" data-testid="status-agency-action-success">{pageSuccess}</p>}
 
       <section className="list-toolbar">
         <label className="list-search">
@@ -293,8 +314,16 @@ export default function AdminAgenciesPage() {
                             Suspendre
                           </button>
                         ) : (
-                          <button className="row-action" disabled={updateAgency.isPending} onClick={() => changeStatus(agency, 'active')} data-testid={`button-activate-agency-${agency.id}`}>
-                            Réactiver
+                          <button
+                            className="row-action"
+                            disabled={updateAgency.isPending}
+                            onClick={() => changeStatus(agency, 'active')}
+                            title={agency.status === 'suspended'
+                              ? 'Lever la suspension sans modifier l’abonnement'
+                              : 'Attribuer l’offre choisie et ouvrir l’espace'}
+                            data-testid={`button-activate-agency-${agency.id}`}
+                          >
+                            {updateAgency.isPending ? 'Traitement…' : agency.status === 'suspended' ? 'Réactiver' : 'Valider l’offre'}
                           </button>
                         )}
                       </td>
@@ -326,6 +355,8 @@ export default function AdminAgenciesPage() {
               <div className="agency-detail-body">
                 <div className="detail-facts">
                   <div><span>Statut</span><strong>{agencyStatus[detail.status] ?? detail.status}</strong></div>
+                  <div><span>Suspendue le</span><strong>{detail.suspended_at ? dateLabel(detail.suspended_at) : '—'}</strong></div>
+                  <div><span>Motif de suspension</span><strong data-testid="detail-suspension-reason">{detail.suspended_reason || '—'}</strong></div>
                   <div><span>Dashboard</span><strong data-testid="detail-dashboard-state">{detail.status === 'suspended' ? 'Désactivé' : 'Actif'}</strong></div>
                   <div><span>Agent WhatsApp</span><strong data-testid="detail-agent-state">{detail.status === 'suspended' ? 'En pause' : 'Actif'}</strong></div>
                   <div><span>Créée le</span><strong>{dateLabel(detail.created_at)}</strong></div>
@@ -473,8 +504,16 @@ export default function AdminAgenciesPage() {
                       Suspendre l’agence
                     </Button>
                   ) : (
-                    <Button disabled={updateAgency.isPending} onClick={() => changeStatus(detail, 'active')} data-testid="button-activate-detail">
-                      Réactiver l’agence
+                    <Button
+                      disabled={updateAgency.isPending}
+                      onClick={() => changeStatus(detail, 'active')}
+                      data-testid="button-activate-detail"
+                    >
+                      {updateAgency.isPending
+                        ? 'Traitement…'
+                        : detail.status === 'suspended'
+                          ? 'Réactiver l’agence'
+                          : 'Valider l’offre de l’agence'}
                     </Button>
                   )}
                   <Button variant="outline" onClick={() => setDetail(null)}>Fermer</Button>

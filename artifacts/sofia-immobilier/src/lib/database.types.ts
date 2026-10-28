@@ -55,6 +55,12 @@ export interface AgencyRow {
   description: string | null;
   commission_rate: number;
   rental_commission_rate: number;
+  /** Suspension administrative : date, motif et neutralisation de la
+   *  suspension automatique. Distincts de l'abonnement et du compte. */
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
+  auto_suspend_disabled_until?: string | null;
+  pending_note?: string | null;
   created_at: string;
   updated_at: string;
 }

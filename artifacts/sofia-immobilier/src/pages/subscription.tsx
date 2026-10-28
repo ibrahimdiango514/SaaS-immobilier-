@@ -312,6 +312,23 @@ export default function SubscriptionPage() {
         description="Choisissez votre offre, payez par Mobile Money et suivez la validation."
       />
 
+      {/* ---------------- Coordonnées de paiement publiées ? ----------------
+          État lu depuis `payment_config()` : si aucun numéro n'est publié,
+          le parcours s'arrêterait à l'écran d'instructions. On le dit AVANT
+          de créer une demande, au lieu de laisser l'agence buter plus loin. */}
+      {usable.length === 0 && (
+        <div className="notice-box is-warning" role="status" data-testid="banner-payment-config-missing">
+          <AlertTriangle size={15} />
+          <span>
+            <strong>Paiement Mobile Money indisponible pour le moment.</strong>{' '}
+            Aucun numéro Orange Money / Moov Money n’est publié par la plateforme
+            (nous n’en inventons pas). Vous pouvez préparer votre demande, mais la
+            transmission de la preuve restera bloquée jusqu’à la publication des
+            coordonnées par l’administrateur.
+          </span>
+        </div>
+      )}
+
       {/* ---------------- Alertes d'échéance réelles ---------------- */}
       {state?.has_due_date && (state.is_due_soon || state.is_overdue) && (
         <div
