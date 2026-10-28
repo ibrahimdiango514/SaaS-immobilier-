@@ -131,7 +131,7 @@ restait bloquée et ses utilisateurs ne pouvaient plus se connecter (`mon_etat_c
 
 ## 2. Fichiers modifiés
 
-Base de données (appliquée en 12 migrations `fix_*`, SQL de référence dans le dépôt) :
+Base de données (appliquée en 14 migrations `fix_*`, SQL de référence dans le dépôt) :
 
 * `db/migrations/2026-10-28_correction_paiement_et_reactivation.sql`
 * `db/rollback/2026-10-28_correction_paiement_et_reactivation_rollback.sql`
@@ -185,7 +185,7 @@ Toutes les fixtures (agences `TEST …`, numéros fictifs) ont été créées **
 | 4 | Formulaire complété après les instructions | ✅ `agency_submit_payment_proof` → `pending` |
 | 5 | Demande réellement stockée dans Supabase | ✅ `SOF-PAY-20261028-R3M9UV / Awa Traore / 2026-10-28`, montant 50 000, statut `pending` |
 | 5b | Preuve visible côté agence | ✅ `agency_payment_access` → `pending`, `has_proof = true`, référence inchangée |
-| 6 | Notification admin persistante | ✅ `admin_alerts.kind = payment_declared`, non lue, lien `/admin/paiements?demande=<uuid>` |
+| 6 | Notification admin persistante | ✅ `admin_alerts.kind = payment_declared`, non lue, lien `/admin/paiements?demande=<uuid>`, motif « Demande SOF-PAY-… — déclaré : 50 000 XOF / attendu : 50 000 XOF — Orange Money — réf. transaction … — soumis le 28/10/2026 12:48 », `metadata.amount_matches = true` |
 | 7 | L'admin ouvre et valide | ✅ file + détail (nom d'agence, montant attendu/déclaré), `admin_review_payment` |
 | 8 | Abonnement activé exactement une fois | ✅ `2026-11-17 → 2026-12-17`, 1 seul `subscription_payments` |
 | 8b | Double validation refusée | ✅ 2ᵉ appel bloqué, toujours 1 paiement |

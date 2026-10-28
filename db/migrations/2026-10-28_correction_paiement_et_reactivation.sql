@@ -51,13 +51,14 @@
 --   §9  Grants + contrôles de fin.
 -- Aucune table supprimée, aucune donnée effacée, RLS inchangée.
 -- =============================================================================
--- APPLIQUÉE sur le projet xbuuhfwobrafcbgtdgjx en 12 migrations nommées :
+-- APPLIQUÉE sur le projet xbuuhfwobrafcbgtdgjx en 14 migrations nommées :
 --   fix_payment_ref_1_generator, fix_payment_ref_2_create_request,
 --   fix_reactivation_3_admin_alert_href, fix_reactivation_4_suspend,
 --   fix_reactivation_5_reactivate, fix_reactivation_6_assign_plan,
 --   fix_reactivation_7_legacy_delegate, fix_reactivation_9_french_texts,
 --   fix_reactivation_10_reactivate_french, fix_payment_ref_11_french_alert,
---   fix_reactivation_12_assign_plan_accent
+--   fix_reactivation_12_assign_plan_accent, fix_reactivation_13_alert_detail,
+--   fix_reactivation_14_alert_labels
 -- (le découpage est uniquement une contrainte d'outillage ; le SQL ci-dessous
 -- est la version de référence, identique à ce qui est en base).
 --
@@ -243,23 +244,57 @@ SECURITY DEFINER
 SET search_path TO 'saas_immobilier', 'public'
 AS $fn$
 DECLARE
-  v_href text := p_action_href;
+  v_href   text := p_action_href;
+  v_meta   jsonb := COALESCE(p_metadata, '{}'::jsonb);
+  v_title  text := p_title;
+  v_reason text := p_reason;
+  v_dec    record;
 BEGIN
   -- Une alerte « paiement » doit ouvrir LA demande, pas seulement la file :
   -- /admin/paiements?demande=<uuid> est lu par l'écran d'administration.
-  IF v_href = '/admin/paiements'
-     AND COALESCE(p_metadata, '{}'::jsonb) ? 'declaration_id' THEN
-    v_href := '/admin/paiements?demande=' || (p_metadata->>'declaration_id');
+  IF v_href = '/admin/paiements' AND v_meta ? 'declaration_id' THEN
+    v_href := '/admin/paiements?demande=' || (v_meta->>'declaration_id');
   END IF;
-  IF v_href = '/admin/agences'
-     AND COALESCE(p_metadata, '{}'::jsonb) ? 'agency_id' THEN
-    v_href := '/admin/agences?agence=' || (p_metadata->>'agency_id');
+  IF v_href = '/admin/agences' AND v_meta ? 'agency_id' THEN
+    v_href := '/admin/agences?agence=' || (v_meta->>'agency_id');
+  END IF;
+
+  -- Alerte de paiement : montant DÉCLARÉ face au montant ATTENDU, moyen lisible,
+  -- référence de transaction et date de soumission, tous lus en base (jamais
+  -- recopiés depuis le navigateur).
+  IF p_kind = 'payment_declared' AND v_meta ? 'declaration_id' THEN
+    SELECT d.reference, d.amount, d.expected_amount, d.currency, d.method,
+           d.transaction_reference, d.submitted_at
+      INTO v_dec
+      FROM saas_immobilier.payment_declarations d
+     WHERE d.id = (v_meta->>'declaration_id')::uuid;
+    IF v_dec.reference IS NOT NULL THEN
+      v_title := 'Paiement à vérifier';
+      v_reason := 'Demande ' || v_dec.reference
+        || ' — déclaré : ' || to_char(v_dec.amount, 'FM999G999G999G990D00') || ' ' || v_dec.currency
+        || ' / attendu : ' || to_char(COALESCE(v_dec.expected_amount, v_dec.amount), 'FM999G999G999G990D00') || ' ' || v_dec.currency
+        || ' — ' || CASE v_dec.method
+                      WHEN 'orange_money' THEN 'Orange Money'
+                      WHEN 'moov_money'   THEN 'Moov Money'
+                      WHEN 'wave'         THEN 'Wave'
+                      ELSE COALESCE(v_dec.method, 'moyen non précisé')
+                    END
+        || ' — réf. transaction ' || COALESCE(v_dec.transaction_reference, '—')
+        || ' — soumis le ' || to_char(COALESCE(v_dec.submitted_at, now()), 'DD/MM/YYYY HH24:MI') || '.';
+      v_meta := v_meta || jsonb_build_object(
+        'declared_amount', v_dec.amount,
+        'expected_amount', v_dec.expected_amount,
+        'amount_matches', (v_dec.expected_amount IS NULL OR v_dec.amount = v_dec.expected_amount),
+        'method', v_dec.method,
+        'transaction_reference', v_dec.transaction_reference,
+        'submitted_at', COALESCE(v_dec.submitted_at, now()));
+    END IF;
   END IF;
 
   INSERT INTO saas_immobilier.admin_alerts
     (alert_key, kind, title, reason, priority, agency_id, action_href, action_label, metadata)
-  VALUES (p_key, p_kind, p_title, p_reason, COALESCE(p_priority, 'normal'),
-          p_agency_id, v_href, p_action_label, COALESCE(p_metadata, '{}'::jsonb))
+  VALUES (p_key, p_kind, v_title, v_reason, COALESCE(p_priority, 'normal'),
+          p_agency_id, v_href, p_action_label, v_meta)
   ON CONFLICT (alert_key) DO NOTHING;
 END
 $fn$;
