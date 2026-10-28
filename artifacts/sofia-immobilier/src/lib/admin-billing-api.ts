@@ -14,7 +14,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSupabaseClient } from './supabase';
 import { getAllAgenciesQueryKey, getPlatformSummaryQueryKey, getActivityLogQueryKey, getSubscriptionsQueryKey } from './data-hooks';
-import { PAYMENT_PROOFS_BUCKET } from './payments-api';
+import { PAYMENT_PROOFS_BUCKET } from './billing-api';
 
 const db = () => getSupabaseClient().schema('saas_immobilier');
 

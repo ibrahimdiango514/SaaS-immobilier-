@@ -23,9 +23,39 @@ import { AdminHeading } from './admin-shell';
 import { adminSetSignupSettings } from '@/lib/trial-api';
 import { LoadingRows, dateTimeLabel } from '@/lib/workspace-ui';
 import {
-  readBillingSettings, readPaymentInstructions, usePlatformSettings,
-  useUpdatePlatformSetting,
+  readBillingSettings, usePlatformSettings, useUpdatePlatformSetting,
 } from '@/lib/admin-billing-api';
+import {
+  METHOD_LABELS, usePaymentConfig, useSavePaymentMethods,
+  type PaymentMethodCode,
+} from '@/lib/billing-api';
+
+const METHOD_CODES: PaymentMethodCode[] = ['orange_money', 'moov_money', 'wave'];
+
+interface MethodDraft {
+  label: string;
+  beneficiary: string;
+  number: string;
+  instructions: string;
+  enabled: boolean;
+  reference_required: boolean;
+  proof_required: boolean;
+}
+
+const EMPTY_METHODS: Record<string, MethodDraft> = Object.fromEntries(
+  METHOD_CODES.map((code) => [
+    code,
+    {
+      label: METHOD_LABELS[code] ?? code,
+      beneficiary: '',
+      number: '',
+      instructions: '',
+      enabled: false,
+      reference_required: true,
+      proof_required: false,
+    },
+  ]),
+);
 
 export default function AdminSettingsPage() {
   const { user } = useAuth();
@@ -33,11 +63,8 @@ export default function AdminSettingsPage() {
   const settingsQ = usePlatformSettings();
   const update = useUpdatePlatformSetting();
 
-  const [orangeNumber, setOrangeNumber] = useState('');
-  const [orangeName, setOrangeName] = useState('');
-  const [waveNumber, setWaveNumber] = useState('');
-  const [waveName, setWaveName] = useState('');
-  const [beneficiary, setBeneficiary] = useState('');
+  const [methods, setMethods] = useState<Record<string, MethodDraft>>(EMPTY_METHODS);
+  const [proofRequired, setProofRequired] = useState(false);
   const [note, setNote] = useState('');
   const [graceDays, setGraceDays] = useState('5');
   const [requireValidation, setRequireValidation] = useState(false);
@@ -48,17 +75,32 @@ export default function AdminSettingsPage() {
 
   const isOwner = roleQ.data?.platformAdmin?.role === 'platform_owner';
 
-  const instructions = useMemo(() => readPaymentInstructions(settingsQ.data), [settingsQ.data]);
   const billing = useMemo(() => readBillingSettings(settingsQ.data), [settingsQ.data]);
+  const configQ = usePaymentConfig();
+  const saveMethods = useSavePaymentMethods();
 
+  // On repart TOUJOURS de la configuration réellement stockée (forme normalisée
+  // renvoyée par la base), jamais d'un état local supposé.
   useEffect(() => {
-    setOrangeNumber(instructions.orange_money.number);
-    setOrangeName(instructions.orange_money.name);
-    setWaveNumber(instructions.wave.number);
-    setWaveName(instructions.wave.name);
-    setBeneficiary(instructions.beneficiary ?? '');
-    setNote(instructions.note ?? '');
-  }, [instructions]);
+    const config = configQ.data;
+    if (!config) return;
+    const next: Record<string, MethodDraft> = {};
+    for (const code of METHOD_CODES) {
+      const row = config.methods?.[code];
+      next[code] = {
+        label: row?.label ?? METHOD_LABELS[code] ?? code,
+        beneficiary: row?.beneficiary ?? '',
+        number: row?.number ?? '',
+        instructions: row?.instructions ?? '',
+        enabled: Boolean(row?.enabled),
+        reference_required: row?.reference_required !== false,
+        proof_required: Boolean(row?.proof_required),
+      };
+    }
+    setMethods(next);
+    setProofRequired(Boolean(config.proof_required));
+    setNote(config.note ?? '');
+  }, [configQ.data]);
 
   useEffect(() => {
     setGraceDays(String(billing.grace_days));
@@ -78,17 +120,24 @@ export default function AdminSettingsPage() {
 
   const savePayments = async () => {
     setMessage('');
+    // Garde-fou client : mêmes règles que public.admin_save_payment_methods.
+    for (const code of METHOD_CODES) {
+      const row = methods[code];
+      if (!row) continue;
+      if (row.number.trim() && !/^[0-9+() .-]{6,24}$/.test(row.number.trim())) {
+        setMessage(`Numéro invalide pour ${METHOD_LABELS[code] ?? code} : chiffres, + ( ) . - uniquement.`);
+        return;
+      }
+      if (row.enabled && !row.number.trim()) {
+        setMessage(`${METHOD_LABELS[code] ?? code} est activé mais aucun numéro n’est renseigné.`);
+        return;
+      }
+    }
     try {
-      await update.mutateAsync({
-        key: 'payment_instructions',
-        value: {
-          orange_money: { name: orangeName.trim(), number: orangeNumber.trim() },
-          wave: { name: waveName.trim(), number: waveNumber.trim() },
-          beneficiary: beneficiary.trim(),
-          note: note.trim(),
-        },
-      });
-      setMessage('Coordonnées de paiement enregistrées. Les agences les voient immédiatement.');
+      await saveMethods.mutateAsync({ methods, proofRequired, note });
+      setMessage(
+        'Moyens de paiement enregistrés. Les agences voient immédiatement ces instructions ; un moyen sans numéro reste bloqué.',
+      );
     } catch (error) {
       setMessage(getSupabaseErrorMessage(error, 'enregistrer les coordonnées'));
     }
@@ -155,81 +204,130 @@ export default function AdminSettingsPage() {
           <div className="settings-heading">
             <div className="settings-icon"><Phone size={17} /></div>
             <div>
-              <h2>Coordonnées de paiement</h2>
-              <p>Affichées dans « Mon offre » de chaque agence, avant la déclaration.</p>
+              <h2>Moyens de paiement</h2>
+              <p>
+                Numéros et consignes réellement affichés aux agences. Un moyen
+                activé sans numéro est refusé ; un moyen sans numéro s’affiche
+                « en cours de configuration » côté agence et la déclaration est
+                bloquée.
+              </p>
             </div>
             <span className={`permission-badge${isOwner ? ' allowed' : ''}`}>
               <KeyRound size={13} /> {isOwner ? 'Modification autorisée' : 'Lecture seule'}
             </span>
           </div>
 
+          {configQ.error && (
+            <p className="form-error" role="alert" data-testid="status-payment-config-error">
+              {getSupabaseErrorMessage(configQ.error, 'charger la configuration des paiements')}
+            </p>
+          )}
+
           <div className="settings-form">
-            <div className="form-field">
-              <label className="form-label" htmlFor="setting-beneficiary">Nom du bénéficiaire</label>
-              <Input
-                id="setting-beneficiary"
-                value={beneficiary}
-                onChange={(e) => setBeneficiary(e.target.value)}
+            <div className="billing-method-editor" data-testid="list-payment-methods">
+              {METHOD_CODES.map((code) => {
+                const row = methods[code] ?? EMPTY_METHODS[code];
+                const updateRow = (patch: Partial<MethodDraft>) =>
+                  setMethods((current) => ({ ...current, [code]: { ...row, ...patch } }));
+                const configured = Boolean(row.number.trim());
+                return (
+                  <article
+                    key={code}
+                    className={`billing-method-card${row.enabled ? ' is-enabled' : ''}`}
+                    data-testid={`card-method-${code}`}
+                  >
+                    <header>
+                      <strong>{METHOD_LABELS[code] ?? code}</strong>
+                      <span className={`billing-flag ${configured ? 'is-ok' : 'is-danger'}`}>
+                        {configured ? 'Configuré' : 'En cours de configuration'}
+                      </span>
+                    </header>
+
+                    <div className="form-grid">
+                      <div className="form-field">
+                        <label className="form-label" htmlFor={`method-${code}-beneficiary`}>
+                          Bénéficiaire
+                        </label>
+                        <Input
+                          id={`method-${code}-beneficiary`}
+                          value={row.beneficiary}
+                          onChange={(e) => updateRow({ beneficiary: e.target.value })}
+                          disabled={disabled}
+                          placeholder="Nom affiché au payeur"
+                          data-testid={`input-method-${code}-beneficiary`}
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label className="form-label" htmlFor={`method-${code}-number`}>
+                          Numéro de paiement
+                        </label>
+                        <Input
+                          id={`method-${code}-number`}
+                          value={row.number}
+                          onChange={(e) => updateRow({ number: e.target.value })}
+                          disabled={disabled}
+                          inputMode="tel"
+                          placeholder="Chiffres, + ( ) . - uniquement"
+                          data-testid={`input-method-${code}-number`}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-field">
+                      <label className="form-label" htmlFor={`method-${code}-instructions`}>
+                        Consignes spécifiques (facultatif)
+                      </label>
+                      <Input
+                        id={`method-${code}-instructions`}
+                        value={row.instructions}
+                        onChange={(e) => updateRow({ instructions: e.target.value })}
+                        disabled={disabled}
+                        placeholder="Ex. Indiquez la référence de la demande dans le motif du transfert."
+                        data-testid={`input-method-${code}-instructions`}
+                      />
+                    </div>
+
+                    <div className="billing-method-flags">
+                      <label className="billing-confirm compact">
+                        <input
+                          type="checkbox"
+                          checked={row.enabled}
+                          onChange={(e) => updateRow({ enabled: e.target.checked })}
+                          disabled={disabled}
+                          data-testid={`checkbox-method-${code}-enabled`}
+                        />
+                        <span>Activer ce moyen</span>
+                      </label>
+                      <label className="billing-confirm compact">
+                        <input
+                          type="checkbox"
+                          checked={row.proof_required}
+                          onChange={(e) => updateRow({ proof_required: e.target.checked })}
+                          disabled={disabled}
+                          data-testid={`checkbox-method-${code}-proof`}
+                        />
+                        <span>Justificatif obligatoire</span>
+                      </label>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <label className="billing-confirm">
+              <input
+                type="checkbox"
+                checked={proofRequired}
+                onChange={(e) => setProofRequired(e.target.checked)}
                 disabled={disabled}
-                placeholder="Ex. Sofia Immobilier SARL"
-                data-testid="input-setting-beneficiary"
+                data-testid="checkbox-proof-required"
               />
-              <small className="form-hint">
-                Nom qui doit apparaître sur le téléphone du payeur au moment du transfert.
-              </small>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-field">
-                <label className="form-label" htmlFor="setting-orange-number">Numéro Orange Money</label>
-                <Input
-                  id="setting-orange-number"
-                  value={orangeNumber}
-                  onChange={(e) => setOrangeNumber(e.target.value)}
-                  disabled={disabled}
-                  placeholder="Ex. +223 70 00 00 00"
-                  inputMode="tel"
-                  data-testid="input-setting-orange-number"
-                />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="setting-orange-name">Titulaire Orange Money</label>
-                <Input
-                  id="setting-orange-name"
-                  value={orangeName}
-                  onChange={(e) => setOrangeName(e.target.value)}
-                  disabled={disabled}
-                  placeholder="Ex. Ibrahim Diango"
-                  data-testid="input-setting-orange-name"
-                />
-              </div>
-            </div>
-
-            <div className="form-grid">
-              <div className="form-field">
-                <label className="form-label" htmlFor="setting-wave-number">Numéro Wave</label>
-                <Input
-                  id="setting-wave-number"
-                  value={waveNumber}
-                  onChange={(e) => setWaveNumber(e.target.value)}
-                  disabled={disabled}
-                  placeholder="Ex. +223 60 00 00 00"
-                  inputMode="tel"
-                  data-testid="input-setting-wave-number"
-                />
-              </div>
-              <div className="form-field">
-                <label className="form-label" htmlFor="setting-wave-name">Titulaire Wave</label>
-                <Input
-                  id="setting-wave-name"
-                  value={waveName}
-                  onChange={(e) => setWaveName(e.target.value)}
-                  disabled={disabled}
-                  placeholder="Ex. Ibrahim Diango"
-                  data-testid="input-setting-wave-name"
-                />
-              </div>
-            </div>
+              <span>
+                Exiger un justificatif pour tous les moyens de paiement (sinon le
+                justificatif reste facultatif, la référence de transaction restant
+                toujours obligatoire).
+              </span>
+            </label>
 
             <div className="form-field">
               <label className="form-label" htmlFor="setting-payment-note">Consigne affichée aux agences</label>
@@ -238,7 +336,7 @@ export default function AdminSettingsPage() {
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 disabled={disabled}
-                placeholder="Ex. Envoyez le montant exact puis déclarez le paiement avec la référence reçue par SMS."
+                placeholder="Ex. Envoyez le montant exact puis transmettez la preuve avec la référence reçue par SMS."
                 data-testid="input-setting-payment-note"
               />
             </div>
@@ -252,10 +350,10 @@ export default function AdminSettingsPage() {
               <Button
                 type="button"
                 onClick={() => void savePayments()}
-                disabled={disabled || update.isPending}
+                disabled={disabled || saveMethods.isPending}
                 data-testid="button-save-payment-settings"
               >
-                <Save size={14} /> {update.isPending ? 'Enregistrement…' : 'Enregistrer les coordonnées'}
+                <Save size={14} /> {saveMethods.isPending ? 'Enregistrement…' : 'Enregistrer les moyens de paiement'}
               </Button>
             </div>
           </div>

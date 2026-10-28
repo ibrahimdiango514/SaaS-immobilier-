@@ -1,378 +1,235 @@
 // =============================================================================
-// BLOC 1 — Déclaration de paiement manuel (Orange Money / Wave).
+// BLOC 1 — Panneau « Abonnement et facturation » (agence)
 // =============================================================================
-// Affiche les instructions lues depuis platform_settings, le formulaire de
-// déclaration (montant, date, moyen, référence, capture optionnelle) et
-// l'historique des déclarations avec leur état.
+// Remplaçait l'ancienne déclaration libre (montant saisi par l'agence, deux
+// moyens codés en dur). Il s'appuie maintenant sur la source unique :
+//   public.agency_payment_access      → offres, moyen configuré, demandes
+//   public.agency_create_payment_request → demande + référence serveur
+//   /abonnement/paiement/:id          → instructions puis preuve de paiement
 //
-// Le serveur refuse une déclaration hors agence : ce composant n'accorde rien.
+// Rien n'est codé en dur ici : ni tarif, ni numéro, ni statut. Si aucun moyen
+// n'est configuré, l'écran l'affiche et la page de paiement bloque l'envoi.
 // =============================================================================
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
+import { Link, useLocation } from 'wouter';
 import {
-  AlertTriangle, CheckCircle2, CreditCard, FileText, ImageIcon, Info,
-  Phone, ShieldCheck, Upload, XCircle,
+  AlertTriangle, ArrowRight, Check, Clock3, CreditCard, Loader2, Lock,
+  ShieldCheck, Wallet,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
+import { useAgency } from '@/lib/agency-context';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
-import { cash, dateLabel, dateTimeLabel } from '@/lib/workspace-ui';
+import { cash, dateLabel } from '@/lib/workspace-ui';
 import {
-  DECLARATION_STATUS_LABELS, PAYMENT_METHODS, describeDeclarationStatus,
-  useAgencyPaymentAccess, useSubmitPaymentDeclaration, validateProofFile,
-  type AgencyPaymentAccess, type PaymentDeclarationRow, type PaymentMethod,
-} from '@/lib/payments-api';
+  REQUEST_STATUS_TONE, SUBSCRIPTION_STATUS_LABELS, requestStatusLabel,
+  useAgencyBilling, useCreatePaymentRequest, type PlanOption,
+} from '@/lib/billing-api';
 
-const today = () => new Date().toISOString().slice(0, 10);
+const unlimited = (value: number) => value >= 1_000_000_000;
 
-function channel(access: AgencyPaymentAccess | undefined, method: PaymentMethod) {
-  const raw = access?.instructions?.[method] ?? {};
-  return { name: (raw.name ?? '').trim(), number: (raw.number ?? '').trim() };
-}
+export function PaymentSection({ agencyId }: { agencyId?: string }) {
+  const { canManageAgency } = useAgency();
+  const billing = useAgencyBilling(agencyId);
+  const createRequest = useCreatePaymentRequest(agencyId);
+  const [, setLocation] = useLocation();
+  const [error, setError] = useState('');
+  const [duration, setDuration] = useState(1);
 
-function InstructionsCard({ access }: { access: AgencyPaymentAccess }) {
-  const beneficiary = (access.instructions?.beneficiary ?? '').trim();
-  const note = (access.instructions?.note ?? '').trim();
-  const configured = PAYMENT_METHODS.some((m) => channel(access, m.value).number);
-
-  if (!configured) {
+  if (billing.isLoading) {
     return (
-      <div className="notice-box" role="status" data-testid="status-payment-instructions-missing">
-        <Info size={14} />
-        <span>
-          Les coordonnées de paiement n’ont pas encore été publiées par
-          l’administrateur de la plateforme. Vous pouvez tout de même déclarer un
-          paiement déjà effectué : saisissez la référence de votre transaction.
-        </span>
-      </div>
+      <section className="panel" data-testid="panel-payment-section">
+        <div className="panel-head">
+          <div>
+            <h2><Wallet size={17} /> Abonnement et facturation</h2>
+            <p>Chargement de vos moyens de paiement…</p>
+          </div>
+        </div>
+        <div className="loading-state" aria-label="Chargement">
+          <Loader2 className="spin" size={18} />
+        </div>
+      </section>
     );
   }
 
-  return (
-    <div className="payment-instructions" data-testid="panel-payment-instructions">
-      <div className="payment-instructions-head">
-        <Phone size={15} />
-        <div>
-          <strong>Comment payer</strong>
-          {beneficiary && <span>Bénéficiaire : {beneficiary}</span>}
+  if (billing.error || !billing.data) {
+    return (
+      <section className="panel" data-testid="panel-payment-section">
+        <div className="panel-head">
+          <div>
+            <h2><Wallet size={17} /> Abonnement et facturation</h2>
+            <p>Paiement Mobile Money validé par l’administrateur</p>
+          </div>
         </div>
-      </div>
-      <div className="payment-channels">
-        {PAYMENT_METHODS.map((method) => {
-          const info = channel(access, method.value);
-          return (
-            <div className={`payment-channel${info.number ? '' : ' is-empty'}`} key={method.value} data-testid={`channel-${method.value}`}>
-              <span className="form-kicker">{method.label}</span>
-              {info.number ? (
-                <>
-                  <strong>{info.number}</strong>
-                  <small>{info.name || beneficiary || 'Bénéficiaire non précisé'}</small>
-                </>
-              ) : (
-                <small>Numéro non publié</small>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {note && <p className="payment-note">{note}</p>}
-    </div>
+        <p className="form-error" role="alert" data-testid="status-payment-section-error">
+          {getSupabaseErrorMessage(billing.error, 'charger l’abonnement')}
+        </p>
+        <Button variant="outline" onClick={() => void billing.refetch()}>Réessayer</Button>
+      </section>
+    );
+  }
+
+  const data = billing.data;
+  const usable = Object.values(data.payment_config?.methods ?? {}).filter((m) => m.configured);
+  const durations = (data.durations ?? [1]).filter((d) => Number.isFinite(d) && d > 0);
+  const open = data.requests.filter((r) =>
+    r.status === 'awaiting_payment' || r.status === 'pending' || r.status === 'correction_requested',
   );
-}
 
-function DeclarationRow({ row }: { row: PaymentDeclarationRow }) {
-  const status = describeDeclarationStatus(row.status);
-  return (
-    <div className={`declaration-row is-${status}`} data-testid={`row-declaration-${row.id}`}>
-      <span className="declaration-icon">
-        {status === 'approved' ? <CheckCircle2 size={16} /> : status === 'rejected' ? <XCircle size={16} /> : <CreditCard size={16} />}
-      </span>
-      <div className="declaration-main">
-        <strong>{cash(Number(row.amount), row.currency)}</strong>
-        <small>
-          {PAYMENT_METHODS.find((m) => m.value === row.method)?.label ?? row.method} ·
-          {' '}payé le {dateLabel(row.paid_on)} · réf. {row.transaction_reference}
-        </small>
-        <small className="declaration-meta">Déclaré le {dateTimeLabel(row.created_at)}</small>
-      </div>
-      <div className="declaration-state">
-        <span className={`status-pill declaration-status is-${status}`}>{DECLARATION_STATUS_LABELS[status]}</span>
-        {status === 'rejected' && row.review_note && (
-          <p className="declaration-reason" data-testid={`text-declaration-reason-${row.id}`}>
-            Motif : {row.review_note}
-          </p>
-        )}
-        {status === 'approved' && row.review_note && (
-          <p className="declaration-reason is-ok">{row.review_note}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DeclarationDialog({
-  open,
-  onOpenChange,
-  access,
-  agencyId,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  access: AgencyPaymentAccess;
-  agencyId?: string;
-}) {
-  const submit = useSubmitPaymentDeclaration(agencyId);
-  const [amount, setAmount] = useState('');
-  const [method, setMethod] = useState<PaymentMethod>('orange_money');
-  const [reference, setReference] = useState('');
-  const [paidOn, setPaidOn] = useState(today());
-  const [proof, setProof] = useState<File | null>(null);
-  const [error, setError] = useState('');
-  const [done, setDone] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
+  const choose = (plan: PlanOption) => {
     setError('');
-    setDone('');
-    setProof(null);
-    setReference('');
-    setPaidOn(today());
-    setMethod('orange_money');
-    setAmount(access.expected_amount > 0 ? String(Math.round(access.expected_amount)) : '');
-  }, [open, access.expected_amount]);
-
-  const info = channel(access, method);
-  const proofIssue = proof ? validateProofFile(proof) : null;
-
-  const onSubmit = async () => {
-    setError('');
-    if (proofIssue) {
-      setError(proofIssue);
-      return;
-    }
-    try {
-      await submit.mutateAsync({
-        amount: Number(amount),
-        method,
-        transactionReference: reference,
-        paidOn,
-        proof,
-      });
-      setDone('Déclaration envoyée. L’administrateur va la vérifier.');
-      window.setTimeout(() => onOpenChange(false), 1600);
-    } catch (e) {
-      setError(getSupabaseErrorMessage(e, 'déclarer le paiement'));
-    }
+    createRequest.mutate(
+      { planId: plan.id, durationMonths: duration },
+      {
+        onSuccess: (created) => setLocation(`/abonnement/paiement/${created.id}`),
+        onError: (e) => setError(getSupabaseErrorMessage(e, 'créer la demande de paiement')),
+      },
+    );
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="form-dialog payment-dialog" data-testid="dialog-payment-declaration">
-        <DialogHeader>
-          <span className="form-kicker">Paiement manuel</span>
-          <DialogTitle>Déclarer mon paiement</DialogTitle>
-          <DialogDescription>
-            Indiquez le paiement que vous avez effectué. Il reste « en attente »
-            jusqu’à sa validation par l’administrateur, qui prolonge alors votre
-            abonnement d’un mois.
-          </DialogDescription>
-        </DialogHeader>
-
-        {access.expected_amount > 0 && access.plan && (
-          <div className="payment-expected" data-testid="status-expected-amount">
-            <Info size={14} />
-            <span>
-              Montant attendu pour {access.plan.display_name} :
-              {' '}<strong>{cash(access.expected_amount, access.plan.currency)}</strong> / mois.
-            </span>
-          </div>
-        )}
-
-        <div className="settings-form">
-          <div className="form-field">
-            <span className="form-label">Moyen de paiement</span>
-            <div className="method-choice" role="radiogroup" aria-label="Moyen de paiement">
-              {PAYMENT_METHODS.map((option) => (
-                <button
-                  type="button"
-                  key={option.value}
-                  role="radio"
-                  aria-checked={method === option.value}
-                  className={`method-option${method === option.value ? ' is-selected' : ''}`}
-                  onClick={() => setMethod(option.value)}
-                  data-testid={`button-method-${option.value}`}
-                >
-                  <strong>{option.label}</strong>
-                  <small>{option.hint}</small>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {info.number && (
-            <div className="notice-box" data-testid="status-channel-target">
-              <Phone size={14} />
-              <span>
-                Envoyez au <strong>{info.number}</strong>
-                {info.name ? ` — ${info.name}` : ''}.
-              </span>
-            </div>
-          )}
-
-          <div className="form-grid">
-            <div className="form-field">
-              <label className="form-label" htmlFor="payment-amount">Montant payé (FCFA)</label>
-              <Input
-                id="payment-amount"
-                type="number"
-                min="0"
-                step="500"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                data-testid="input-payment-amount"
-              />
-            </div>
-            <div className="form-field">
-              <label className="form-label" htmlFor="payment-date">Date du paiement</label>
-              <Input
-                id="payment-date"
-                type="date"
-                max={today()}
-                value={paidOn}
-                onChange={(e) => setPaidOn(e.target.value)}
-                data-testid="input-payment-date"
-              />
-            </div>
-          </div>
-
-          <div className="form-field">
-            <label className="form-label" htmlFor="payment-reference">
-              Référence de la transaction
-            </label>
-            <Input
-              id="payment-reference"
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              placeholder="Ex. MP241021.1432.A12345"
-              data-testid="input-payment-reference"
-            />
-            <small className="form-hint">
-              Identifiant reçu par SMS après le transfert. Obligatoire.
-            </small>
-          </div>
-
-          <div className="form-field">
-            <span className="form-label">Capture du transfert (optionnelle)</span>
-            <label className={`upload-control proof-upload${proof ? ' has-file' : ''}`}>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,application/pdf"
-                onChange={(e) => { setProof(e.target.files?.[0] ?? null); e.currentTarget.value = ''; }}
-                data-testid="input-payment-proof"
-              />
-              {proof ? <FileText size={15} /> : <Upload size={15} />}
-              {proof ? proof.name : 'Joindre une capture (JPG, PNG, WebP ou PDF · 5 Mo max)'}
-            </label>
-            {proofIssue && <p className="form-error" role="alert">{proofIssue}</p>}
-            <small className="form-hint">
-              <ShieldCheck size={12} /> Stockage privé : visible par votre agence
-              et l’administrateur uniquement.
-            </small>
-          </div>
-
-          {error && <p className="form-error" role="alert" data-testid="status-payment-error">{error}</p>}
-          {done && <p className="form-feedback" role="status" data-testid="status-payment-success">{done}</p>}
-
-          <div className="form-actions">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-payment">
-              Annuler
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void onSubmit()}
-              disabled={submit.isPending || !amount || !reference.trim() || !paidOn || Boolean(proofIssue)}
-              data-testid="button-submit-payment"
-            >
-              {submit.isPending ? 'Envoi…' : 'Déclarer le paiement'}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function PaymentSection({ agencyId }: { agencyId?: string }) {
-  const access = useAgencyPaymentAccess(agencyId);
-  const [open, setOpen] = useState(false);
-  const data = access.data;
-  const declarations = useMemo(() => data?.declarations ?? [], [data]);
-  const pending = declarations.filter((d) => describeDeclarationStatus(d.status) === 'pending');
-
-  if (access.isLoading) return null;
-  if (access.error || !data) {
-    return (
-      <div className="notice-box is-error" role="alert" data-testid="status-payment-access-error">
-        <AlertTriangle size={14} />
-        <span>{getSupabaseErrorMessage(access.error, 'charger les informations de paiement')}</span>
-      </div>
-    );
-  }
-
-  return (
-    <section className="panel payment-panel" data-testid="panel-payment">
+    <section className="panel" data-testid="panel-payment-section">
       <div className="panel-head">
         <div>
-          <h2><CreditCard size={17} /> Paiement de l’abonnement</h2>
-          <p>Déclarez un paiement Orange Money ou Wave, puis suivez sa validation.</p>
+          <h2><Wallet size={17} /> Abonnement et facturation</h2>
+          <p>Choisissez une offre, payez par Mobile Money, transmettez la preuve.</p>
         </div>
-        <Button
-          className="primary-action"
-          onClick={() => setOpen(true)}
-          disabled={!data.can_manage}
-          data-testid="button-pay-subscription"
-        >
-          <CreditCard size={14} /> Payer mon abonnement
-        </Button>
+        <Link href="/abonnement" className="button-link" data-testid="link-full-billing">
+          Tout voir <ArrowRight size={13} />
+        </Link>
       </div>
 
-      {!data.can_manage && (
-        <div className="permission-note" role="status" data-testid="status-payment-readonly">
-          <ShieldCheck size={15} />
+      {!canManageAgency && (
+        <div className="permission-note" role="status" data-testid="status-payment-permission">
+          <Lock size={15} />
           <span>
-            Seul le propriétaire ou un administrateur de l’agence peut déclarer un
-            paiement. Vous pouvez consulter l’état des déclarations.
+            Seuls le propriétaire et les administrateurs de l’agence peuvent payer
+            l’abonnement.
           </span>
         </div>
       )}
 
-      {pending.length > 0 && (
-        <div className="notice-box" role="status" data-testid="status-payment-pending">
-          <Info size={14} />
+      <div className="billing-current-strip">
+        <div>
+          <span>Offre actuelle</span>
+          <strong data-testid="text-current-plan-name">
+            {data.plan?.display_name ?? 'Aucune offre'}
+          </strong>
+        </div>
+        <div>
+          <span>Statut</span>
+          <strong data-testid="text-subscription-status">
+            {SUBSCRIPTION_STATUS_LABELS[data.subscription?.status ?? ''] ?? 'Aucun abonnement'}
+          </strong>
+        </div>
+        <div>
+          <span>Échéance</span>
+          <strong data-testid="text-subscription-end">
+            {data.subscription?.ends_at ? dateLabel(data.subscription.ends_at) : '—'}
+          </strong>
+        </div>
+      </div>
+
+      {usable.length === 0 && (
+        <div className="notice-box is-warning" role="status" data-testid="status-payment-instructions-missing">
+          <AlertTriangle size={15} />
           <span>
-            {pending.length} déclaration(s) en attente de validation. Votre
-            abonnement sera prolongé dès validation.
+            <strong>Moyen de paiement en cours de configuration.</strong> Aucun
+            numéro de paiement n’est encore publié par l’administrateur : vous
+            pouvez choisir une offre, mais la transmission d’une preuve reste
+            bloquée jusqu’à la configuration.
           </span>
         </div>
       )}
 
-      <InstructionsCard access={data} />
+      {error && (
+        <p className="form-error" role="alert" data-testid="status-create-request-error">{error}</p>
+      )}
 
-      <div className="declaration-list" data-testid="list-declarations">
-        {declarations.length ? (
-          declarations.map((row) => <DeclarationRow key={row.id} row={row} />)
-        ) : (
-          <div className="empty-table" data-testid="empty-declarations">
-            <div className="empty-table-mark"><ImageIcon size={17} /></div>
-            <strong>Aucune déclaration</strong>
-            <p>Vos paiements déclarés apparaîtront ici avec leur état.</p>
-          </div>
-        )}
+      <div className="billing-offer-toolbar">
+        <label className="billing-duration">
+          <span>Durée</span>
+          <select
+            value={duration}
+            onChange={(e) => setDuration(Number(e.target.value))}
+            aria-label="Durée de l’abonnement"
+            data-testid="select-panel-duration"
+          >
+            {durations.map((months) => (
+              <option key={months} value={months}>
+                {months === 1 ? '1 mois' : `${months} mois`}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <DeclarationDialog open={open} onOpenChange={setOpen} access={data} agencyId={agencyId} />
+      <div className="billing-plans is-compact">
+        {(data.plans ?? []).map((plan) => {
+          const busy = createRequest.isPending && createRequest.variables?.planId === plan.id;
+          return (
+            <article
+              key={plan.id}
+              className={`billing-plan${plan.id === data.plan?.id ? ' is-current' : ''}`}
+              data-testid={`card-panel-plan-${plan.name}`}
+            >
+              <header>
+                <div>
+                  <strong>{plan.display_name ?? plan.name}</strong>
+                  {plan.id === data.plan?.id && <span className="billing-plan-tag">Offre actuelle</span>}
+                </div>
+                <p className="billing-plan-price">
+                  {cash(Number(plan.price_monthly), plan.currency)} <span>/ mois</span>
+                </p>
+              </header>
+              <ul className="billing-plan-limits">
+                <li>{unlimited(plan.max_properties) ? 'Biens illimités' : `${plan.max_properties} biens`}</li>
+                <li>{unlimited(plan.max_members) ? 'Utilisateurs illimités' : `${plan.max_members} utilisateurs`}</li>
+                <li>
+                  {unlimited(plan.monthly_agent_messages)
+                    ? 'Messages IA illimités'
+                    : `${plan.monthly_agent_messages} messages IA`}
+                </li>
+              </ul>
+              <p className="billing-plan-total">
+                <Check size={12} /> Total {duration === 1 ? '1 mois' : `${duration} mois`} :{' '}
+                <strong>{cash(Number(plan.price_monthly) * duration, plan.currency)}</strong>
+              </p>
+              <Button
+                className="primary-action"
+                disabled={!canManageAgency || createRequest.isPending}
+                onClick={() => choose(plan)}
+                data-testid={`button-panel-choose-${plan.name}`}
+              >
+                {busy ? <Loader2 size={14} className="spin" /> : <CreditCard size={14} />}
+                Payer cette offre
+              </Button>
+            </article>
+          );
+        })}
+      </div>
+
+      {open.length > 0 && (
+        <div className="billing-open-requests" data-testid="panel-panel-open-requests">
+          <h3><Clock3 size={14} /> Demandes en cours</h3>
+          {open.map((row) => (
+            <div key={row.id} className="billing-open-row" data-testid={`row-panel-request-${row.id}`}>
+              <span className="mono">{row.reference}</span>
+              <span>{cash(Number(row.expected_amount ?? row.amount ?? 0), row.currency)}</span>
+              <span className={`status-pill billing-status ${REQUEST_STATUS_TONE[row.status] ?? ''}`}>
+                {requestStatusLabel(row.status)}
+              </span>
+              <Link href={`/abonnement/paiement/${row.id}`} className="button-link">
+                {row.status === 'correction_requested' ? 'Corriger' : 'Continuer'} <ArrowRight size={12} />
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="billing-footnote">
+        <ShieldCheck size={12} /> Le paiement n’est jamais validé automatiquement :
+        un administrateur vérifie la transaction avant d’activer l’abonnement.
+      </p>
     </section>
   );
 }

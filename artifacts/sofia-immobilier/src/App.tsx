@@ -11,7 +11,7 @@ import {
   Camera, ImagePlus, Trash2, CalendarDays, BarChart3, UserCog, MessageCircle,
   Bell, CheckCheck, UserPlus, Wallet, Upload, Star, ChevronLeft, ChevronRight,
   // BLOC 3 (session 2) : cadenas des modules non inclus + etincelle « offre superieure ».
-  Lock, Sparkles,
+  Lock, Sparkles, CreditCard,
 } from 'lucide-react';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -88,6 +88,8 @@ import TeamPage from '@/pages/team';
 import JoinAgencyPage from '@/pages/rejoindre';
 import ForcePasswordPage from '@/pages/force-password';
 import MyOfferPage from '@/pages/my-offer';
+import SubscriptionPage from '@/pages/subscription';
+import SubscriptionPaymentPage from '@/pages/subscription-payment';
 
 const queryClient = new QueryClient();
 
@@ -102,6 +104,7 @@ const nav = [
   { href: '/automatisations', label: 'Automatisations', icon: RefreshCw },
   { href: '/agence', label: 'Agence et membres', icon: UsersRound },
   { href: '/mon-offre', label: 'Mon offre', icon: Wallet },
+  { href: '/abonnement', label: 'Abonnement et facturation', icon: CreditCard },
   { href: '/equipe', label: 'Équipe', icon: UserCog },
   { href: '/profil', label: 'Mon profil', icon: UserRound },
   { href: '/parametres', label: 'Paramètres', icon: Settings2 },
@@ -139,11 +142,11 @@ function AppShell({ children }: { children: ReactNode }) {
   const moduleAccess = useActiveModuleAccess();
   // BLOC 4 (session 2) : l'agent n'a acces ni a l'Equipe, ni a Mon offre
   // (paiements, offre, consommation), ni aux Parametres de l'agence.
-  const agentHiddenRoutes = ['/equipe', '/mon-offre', '/parametres'];
+  const agentHiddenRoutes = ['/equipe', '/mon-offre', '/abonnement', '/parametres'];
   const visibleNav = isAgentOnly ? nav.filter((item) => !agentHiddenRoutes.includes(item.href)) : nav;
   // BLOC 9 : journal des routes internes -> le bouton retour ne sort jamais de l'app.
   useEffect(() => { trackRoute(path); }, [path]);
-  const currentLabel = nav.find((item) => item.href === path)?.label ?? (path.startsWith('/biens/') ? 'Fiche bien' : path.startsWith('/contacts/') ? 'Fiche contact' : 'Espace de travail');
+  const currentLabel = nav.find((item) => item.href === path)?.label ?? (path.startsWith('/abonnement/paiement/') ? 'Paiement de l’abonnement' : path.startsWith('/biens/') ? 'Fiche bien' : path.startsWith('/contacts/') ? 'Fiche contact' : 'Espace de travail');
   const handleSignOut = async () => {
     setSignOutError('');
     try {
@@ -1211,6 +1214,8 @@ function RoutedContent() {
     <Route path="/automatisations" component={AutomationsPage} />
     <Route path="/agence" component={AgencyPage} />
     <Route path="/mon-offre" component={MyOfferPage} />
+    <Route path="/abonnement" component={SubscriptionPage} />
+    <Route path="/abonnement/paiement/:requestId" component={SubscriptionPaymentPage} />
     <Route path="/equipe" component={TeamPage} />
     <Route path="/parametres" component={SettingsPage} />
     <Route component={NotFound} />

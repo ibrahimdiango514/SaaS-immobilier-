@@ -930,8 +930,14 @@ export async function getPlatformRole(userId?: string): Promise<PlatformRole> {
   if (adminRes.error) throw adminRes.error;
   const profile = profileRes.data;
   const platformAdmin = adminRes.data;
+  // Les droits d'administration viennent UNIQUEMENT de
+  // `saas_immobilier.platform_admins` (statut actif) — exactement ce que
+  // vérifie public.is_platform_admin() côté serveur. `user_profiles.role` est
+  // modifiable par l'utilisateur lui-même : il ne doit jamais ouvrir la
+  // console d'administration (cf. migration
+  // 2026-10-28_paiement_manuel_durcissement_admin.sql).
   return {
-    isAdmin: profile?.role === 'admin' || Boolean(platformAdmin),
+    isAdmin: Boolean(platformAdmin),
     profile,
     platformAdmin,
   };
