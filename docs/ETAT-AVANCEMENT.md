@@ -1863,3 +1863,64 @@ des modèles, de la table `contracts` et du bucket privé.
   (elles n'ont pas été modifiées : le blocage venait du plafond de places calculé
   en base, désormais corrigé).
 - Comportement réel de l'assistant IA avec le plafond d'essai (200 messages).
+
+---
+
+# SESSION 2026-11-05 — SASPAY UNIQUE, ACTIVATION AUTOMATIQUE
+
+Branche : `arena/59f9a3f0-saas-immobilier` (base `a37c0a9`).
+
+## Decision produit (utilisateur)
+
+- **SasPay devient l'unique moyen de paiement.**
+- **Les paiements manuels (declaration + capture + validation admin) sont abandonnes.**
+- **Tout doit etre automatique** : aucune action d'administrateur dans le parcours.
+
+## Fait : le paiement de creation (`setup`) n'attend plus de validation admin
+
+Migration `db/migrations/2026-11-05_saspay_setup_automatique.sql`
+(rollback : `db/rollback/2026-11-05_saspay_setup_automatique_rollback.sql`).
+Seule la branche `setup` de `public.saspay_confirm_payment` est modifiee.
+
+Avant : le paiement etait marque « paye », puis laisse en attente
+(`requires_admin_validation = true`) ; aucun abonnement, aucun encaissement.
+Apres : des la confirmation SasPay, dans la meme transaction —
+
+1. agence `pending` -> `active` (et `suspended` pour impaye -> `active`) ;
+2. abonnement cree s'il manque, sinon bascule sur l'offre payee en `active` ;
+3. echeance = la plus lointaine entre (fin d'essai, echeance en cours,
+   aujourd'hui) + 1 mois ;
+4. encaissement ecrit dans `subscription_payments` (`method = 'saspay'`) ;
+5. evenement `activation` dans `subscription_events` ;
+6. notification au proprietaire de l'agence.
+
+`admin_assign_plan` n'est **pas** appelee : elle exige `is_platform_admin()`,
+qui lit `auth.uid()` — NULL cote webhook (`service_role`). L'activation est
+ecrite en autonome, sur le modele de la branche `renewal` (deja automatique).
+
+### Tests (SQL simule, transaction annulee, aucune ecriture conservee)
+
+| cas | avant | apres |
+|---|---|---|
+| agence `pending`, 150 000 XOF | attente d'un admin | `active`, abonnement `active` sur la bonne offre, echeance 04/12/2026, 1 encaissement, `exige_admin=false` |
+| agence `suspended` pour impaye | attente d'un admin | `active` |
+| 2e appel sur le meme paiement | — | `already_processed = true`, toujours 1 seul encaissement |
+
+### Bug trouve puis corrige par les tests
+
+`v_agency` ne chargeait pas `suspended_reason` : la branche « agence suspendue »
+levait `42703 record "v_agency" has no field "suspended_reason"`. Corrige dans
+la migration et reapplique en base.
+
+## Reste a faire (dans l'ordre)
+
+1. Rapatrier le front SasPay depuis `arena/f5a4a0d5-saas-immobilier` :
+   `src/lib/saspay-api.ts`, `src/pages/payment-return.tsx`, route
+   `/paiement/retour`, cablage `my-offer` / `pending` / `admin/pending`.
+   (Base et Edge Functions sont deja deployees : rien a reappliquer.)
+2. Supprimer la voie manuelle : `payment-panel`, `payments-api`,
+   `review_payment_declaration`, file admin, instructions OM/Wave.
+3. Renouvellement : bandeau d'echeance + paiement 1 clic, relances, suspension auto.
+4. Revoir le parcours de creation d'agence (essai 14 jours vs paiement immediat)
+   — decision utilisateur en attente.
+5. Trancher qui paie les frais SasPay (4 000 XOF constates sur 100 000).
