@@ -811,6 +811,8 @@ button, input {
 }
 .panel-head h2 { margin: 0; color: var(--si-text-heading); font-family: var(--app-font-serif); font-size: 14px; letter-spacing: -.025em; }
 .panel-head p { margin: 5px 0 0; color: var(--si-text-mute); font-size: 10px; }
+/* SASPAY : double action du panneau paiement (en ligne + déclaration manuelle). */
+.panel-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .text-action {
   display: inline-flex;
   gap: 5px;

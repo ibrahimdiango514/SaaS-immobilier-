@@ -161,6 +161,86 @@ export function useActivatePendingAgency() {
   });
 }
 
+/* --------------------------------------------------------------------------- */
+/* SASPAY — paiement d'installation en ligne (validation admin après paiement)  */
+/* --------------------------------------------------------------------------- */
+
+export type PendingOnlinePayment = {
+  id: string;
+  agency_id: string;
+  status: 'pending' | 'paid' | 'failed' | 'expired' | 'cancelled' | string;
+  amount: number;
+  currency: string;
+  purpose: string;
+  checkout_session_id: string | null;
+  transaction_reference: string | null;
+  paid_at: string | null;
+  reconciled_at: string | null;
+  created_at: string;
+};
+
+const db = () => getSupabaseClient().schema('saas_immobilier');
+
+/**
+ * Intentions de paiement en ligne « setup » des agences en attente.
+ * RLS : le lecteur est un administrateur plateforme (politique
+ * online_payments_platform_admin_select).
+ */
+export function usePendingOnlinePayments(agencyIds: string[], enabled = true) {
+  const sortedIds = [...agencyIds].sort();
+  return useQuery({
+    queryKey: ['pending', 'online-payments', sortedIds.join(',')],
+    enabled: enabled && sortedIds.length > 0,
+    staleTime: 5_000,
+    queryFn: async (): Promise<PendingOnlinePayment[]> => {
+      const { data, error } = await db()
+        .from('online_payments')
+        .select(
+          'id, agency_id, status, amount, currency, purpose, checkout_session_id,' +
+            ' transaction_reference, paid_at, reconciled_at, created_at',
+        )
+        .eq('purpose', 'setup')
+        .in('agency_id', sortedIds)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      // Le select concatene n'est pas infere par les types generated :
+      // conversion explicite via unknown (meme motif que les autres hooks).
+      return (data ?? []) as unknown as PendingOnlinePayment[];
+    },
+  });
+}
+
+/**
+ * Validation d'un dossier dont le paiement d'installation a été confirmé EN
+ * LIGNE : active l'agence ET encaisse l'intention SasPay (barrière unique
+ * online_payment_id — un second appel ne double jamais l'encaissement).
+ */
+export function useActivatePendingAgencyPaid() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (agencyId: string) => {
+      const { data, error } = await rpc().rpc('admin_activate_pending_agency_paid', {
+        p_agency_id: agencyId,
+      });
+      if (error) throw error;
+      return data as {
+        plan_name?: string;
+        ends_at?: string;
+        subscription_id?: string;
+        payment_id?: string;
+        activated?: boolean;
+      };
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['pending'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin'] }),
+        queryClient.invalidateQueries({ queryKey: ['sofia'] }),
+      ]);
+    },
+  });
+}
+
 export function useRejectPendingAgency() {
   const queryClient = useQueryClient();
   return useMutation({

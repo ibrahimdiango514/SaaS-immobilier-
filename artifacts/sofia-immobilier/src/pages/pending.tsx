@@ -248,8 +248,10 @@ export default function PendingValidationPage() {
           </div>
         )}
 
-        {/* Réutilise submit_payment_declaration : aucun doublon de logique. */}
-        <PaymentSection agencyId={activeAgencyId} />
+        {/* Réutilise submit_payment_declaration : aucun doublon de logique.
+            purpose="setup" → le bouton « Payer en ligne » ouvre les frais
+            d'installation + premier mois (SasPay), le manuel reste en place. */}
+        <PaymentSection agencyId={activeAgencyId} purpose="setup" />
       </section>
 
       {/* --- Emplacement réservé au contrat (non construit) ------------------ */}

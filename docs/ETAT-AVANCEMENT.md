@@ -1863,3 +1863,45 @@ des modèles, de la table `contracts` et du bucket privé.
   (elles n'ont pas été modifiées : le blocage venait du plafond de places calculé
   en base, désormais corrigé).
 - Comportement réel de l'assistant IA avec le plafond d'essai (200 messages).
+
+## PHASE 1 — SASPAY (paiement en ligne) : PRÊT À DÉPLOYER (2026-11-03)
+
+Implémentation complète, testée en staging local isolé (PGlite, miroir
+production) : **69 assertions, 0 échec** (`node db/staging/run-tests.mjs`).
+
+**Base (`db/migrations/2026-11-03_saspay_paiements_en_ligne.sql`, rollback
+`db/rollback/…_rollback.sql`)** — 13 sections additives :
+- tables `online_payments` (barrières d'unicité par purpose) et
+  `saspay_webhook_events` (boîte d'audit exclusive service_role) ;
+- RPC `saspay_create_checkout` / `saspay_attach_checkout` /
+  `saspay_confirm_payment` (idempotent, barrière de montant) /
+  `saspay_payment_state` / `saspay_recent_pending_sessions` /
+  `admin_activate_pending_agency_paid` / `agency_invoices` ;
+- effets par purpose : setup → encaissement après validation admin ;
+  renewal → encaissement + prolongation 1 mois + réactivation ;
+  invoice → encaissement + facture payée ;
+- §12 : correctif `submit_payment_declaration` qui fige `plan_id` (sans lui,
+  toute validation manuelle échouait en production) ;
+- §13 : correctif des records non initialisés dans
+  `admin_activate_agency_journaled` (première activation) et
+  `admin_change_agency_plan_journaled`.
+
+**Edge Functions (`supabase/functions/`)** — `saspay-checkout` (intention +
+session SasPay, clé serveur), `saspay-webhook` (HMAC-SHA256
+`timestamp.corps`, tolérance 300 s, rapprochement par statut serveur),
+`saspay-verify` (retour navigateur, filet sécurité).
+
+**Frontend** — `src/lib/saspay-api.ts` ; bouton « Payer en ligne » dans
+`payment-panel.tsx` (manuel Orange Money/Wave conservé) ; route
+`/paiement/retour` **avant** le gate (`App.tsx`) ; `pending.tsx` en mode
+setup ; factures de prorata payables dans `my-offer.tsx` ;
+`admin/pending.tsx` : bouton « Paiement reçu — valider et ouvrir »
+(`admin_activate_pending_agency_paid`).
+
+**Reste à faire (nécessite vos clés / votre accord)** :
+1. `supabase secrets set SASPAY_SECRET_KEY=… SASPAY_WEBHOOK_SECRET=…`
+2. Déployer les 3 fonctions avec `--no-verify-jwt` (pattern existant).
+3. Appliquer la migration en production (avec son accord) — un seul commit
+   SQL, rollback fourni.
+4. Configurer l'URL du webhook dans le dashboard SasPay
+   (`…/functions/v1/saspay-webhook`).

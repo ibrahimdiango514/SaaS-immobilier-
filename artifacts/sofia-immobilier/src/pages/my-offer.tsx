@@ -4,10 +4,14 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AlertTriangle, Building2, Check, ImageIcon, Lock, Sparkles, UsersRound,
+  AlertTriangle, Building2, Check, CreditCard, ImageIcon, Lock, Sparkles, UsersRound,
 } from 'lucide-react';
 import { ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel, formatDateTimeShort, safeFormat } from '@/lib/workspace-ui';
 import { PaymentSection } from '@/components/payment-panel';
+// SASPAY : factures de prorata (changement d'offre) payables en ligne.
+import {
+  createSaspayCheckout, saspayErrorLabel, useAgencyInvoices,
+} from '@/lib/saspay-api';
 // BLOC 7 : jauge « Utilisation IA ce mois » (lecture seule, quotas de l'offre).
 import { useAgencyAiUsage, compactNumber } from '@/lib/usage-api';
 // BLOC 11 (bug 4) : suivi des demandes de changement d'offre cote agence.
@@ -148,6 +152,34 @@ export default function MyOfferPage() {
   // en bas de la page, hors ecran au moment du clic -> « rien ne se passe ».
   const [upgradeMessage, setUpgradeMessage] = useState('');
   const [upgradeFailed, setUpgradeFailed] = useState(false);
+  // SASPAY : paiement en ligne d'une facture de prorata.
+  const invoices = useAgencyInvoices(activeAgencyId);
+  const [payingInvoice, setPayingInvoice] = useState<string | null>(null);
+  const [invoicePayError, setInvoicePayError] = useState('');
+
+  const payInvoiceOnline = async (invoiceId: string) => {
+    if (!activeAgencyId || payingInvoice) return;
+    setPayingInvoice(invoiceId);
+    setInvoicePayError('');
+    try {
+      const intent = await createSaspayCheckout({
+        agencyId: activeAgencyId,
+        purpose: 'invoice',
+        invoiceId,
+      });
+      if (!intent.checkout_url) {
+        throw new Error('URL de paiement absente de la réponse du serveur.');
+      }
+      window.location.assign(intent.checkout_url);
+    } catch (error) {
+      setInvoicePayError(saspayErrorLabel(error, 'régler la facture en ligne'));
+      setPayingInvoice(null);
+    }
+  };
+
+  const pendingInvoices = (invoices.data ?? []).filter(
+    (invoice) => invoice.status === 'pending',
+  );
 
   // BLOC 10 (roles) : « Mon offre » regroupe l'abonnement, les declarations de
   // paiement et la consommation. Reserve au proprietaire et aux administrateurs.
@@ -497,6 +529,61 @@ export default function MyOfferPage() {
           </div>
         )}
       </section>
+
+      {/* SASPAY : factures de prorata en attente → règlement en ligne.
+          Le paiement manuel (admin) reste possible : c'est un second canal. */}
+      {pendingInvoices.length > 0 && (
+        <section className="panel" data-testid="panel-invoices">
+          <div className="panel-head">
+            <div>
+              <h2><CreditCard size={17} /> Facture à régler</h2>
+              <p>
+                Montant du prorata dû après un changement d’offre — réglez-le en
+                ligne pour finaliser la mise à jour.
+              </p>
+            </div>
+          </div>
+          {invoicePayError && (
+            <div className="notice-box is-error" role="alert" data-testid="status-invoice-pay-error">
+              <AlertTriangle size={14} />
+              <span>{invoicePayError}</span>
+            </div>
+          )}
+          <div className="declaration-list">
+            {pendingInvoices.map((invoice) => (
+              <div className="declaration-row" key={invoice.id} data-testid={`row-invoice-${invoice.id}`}>
+                <span className="declaration-icon"><CreditCard size={16} /></span>
+                <div className="declaration-main">
+                  <strong>{cash(Number(invoice.amount), invoice.currency)}</strong>
+                  <small>
+                    {invoice.plan_from_name ?? 'Offre actuelle'} →{' '}
+                    {invoice.plan_to_name ?? 'nouvelle offre'}
+                    {invoice.reference ? ` · réf. ${invoice.reference}` : ''}
+                  </small>
+                  <small className="declaration-meta">
+                    Émise le {dateLabel(invoice.created_at)}
+                    {invoice.prorata_days != null && invoice.prorata_days_in_month != null
+                      ? ` · prorata ${invoice.prorata_days}/${invoice.prorata_days_in_month} j`
+                      : ''}
+                  </small>
+                </div>
+                <div className="declaration-state">
+                  <button
+                    type="button"
+                    className="button-link is-primary"
+                    onClick={() => void payInvoiceOnline(invoice.id)}
+                    disabled={Boolean(payingInvoice)}
+                    data-testid={`button-pay-invoice-${invoice.id}`}
+                  >
+                    <CreditCard size={13} />
+                    {payingInvoice === invoice.id ? 'Ouverture…' : 'Payer en ligne'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* BLOC 1 : déclaration de paiement manuel (Orange Money / Wave) et
           suivi de l'état des déclarations de l'agence. */}

@@ -22,12 +22,15 @@ import { AdminHeading } from './admin-shell';
 import { ErrorState, LoadingRows, cash, dateLabel, useSafeRetry } from '@/lib/workspace-ui';
 import {
   usePendingAgencies, useActivatePendingAgency, useRejectPendingAgency,
-  pendingDeclarationLabel, pendingErrorLabel, type PendingAgencyRow,
+  usePendingOnlinePayments, useActivatePendingAgencyPaid,
+  pendingDeclarationLabel, pendingErrorLabel,
+  type PendingAgencyRow, type PendingOnlinePayment,
 } from '@/lib/pending-api';
 
 export default function AdminPendingPage() {
   const queue = usePendingAgencies();
   const activate = useActivatePendingAgency();
+  const activatePaid = useActivatePendingAgencyPaid();
   const reject = useRejectPendingAgency();
   const [search, setSearch] = useState('');
   const [notice, setNotice] = useState('');
@@ -45,6 +48,15 @@ export default function AdminPendingPage() {
       .includes(needle);
   });
 
+  // SASPAY : intentions de paiement en ligne « installation » des dossiers
+  // affichés (RLS : administrateur plateforme).
+  const pendingIds = (queue.data?.agencies ?? []).map((row) => row.agency_id);
+  const onlinePayments = usePendingOnlinePayments(pendingIds, !queue.isLoading && !queue.error);
+  const onlineByAgency = new Map<string, PendingOnlinePayment>();
+  for (const payment of onlinePayments.data ?? []) {
+    if (!onlineByAgency.has(payment.agency_id)) onlineByAgency.set(payment.agency_id, payment);
+  }
+
   const onActivate = async (row: PendingAgencyRow) => {
     setNotice('');
     setNoticeError(false);
@@ -56,6 +68,25 @@ export default function AdminPendingPage() {
     } catch (error) {
       setNoticeError(true);
       setNotice(pendingErrorLabel(error, 'valider cette agence'));
+    }
+  };
+
+  // SASPAY : le paiement d'installation a été confirmé EN LIGNE → cette
+  // validation encaisse l'intention et ouvre le dashboard (barrière unique :
+  // un double clic ne double jamais l'encaissement).
+  const onActivatePaid = async (row: PendingAgencyRow) => {
+    setNotice('');
+    setNoticeError(false);
+    try {
+      const result = await activatePaid.mutateAsync(row.agency_id);
+      setNotice(
+        `« ${row.agency_name} » validée avec paiement en ligne encaissé${
+          result.ends_at ? ` : offre active jusqu’au ${dateLabel(result.ends_at)}` : ''
+        }. Le tableau de bord de l’agence est ouvert.`,
+      );
+    } catch (error) {
+      setNoticeError(true);
+      setNotice(pendingErrorLabel(error, 'valider avec le paiement en ligne'));
     }
   };
 
@@ -127,7 +158,10 @@ export default function AdminPendingPage() {
         <div className="pending-admin-list">
           {rows.map((row) => {
             const declaration = row.latest_declaration;
-            const busy = activate.isPending || reject.isPending;
+            const busy = activate.isPending || activatePaid.isPending || reject.isPending;
+            // SASPAY : intention d'installation en ligne rattachée à ce dossier.
+            const online = onlineByAgency.get(row.agency_id) ?? null;
+            const onlineReady = online?.status === 'paid' && !online.reconciled_at;
             return (
               <article className="panel pending-admin-card" key={row.agency_id} data-testid={`card-pending-${row.slug ?? row.agency_id}`}>
                 <header className="pending-admin-head">
@@ -170,6 +204,17 @@ export default function AdminPendingPage() {
                         ? `${pendingDeclarationLabel(declaration.status)} · réf. ${declaration.transaction_reference}${declaration.paid_on ? ` · payé le ${dateLabel(declaration.paid_on)}` : ''}`
                         : 'L’agence n’a pas encore soumis de déclaration'}
                     </small>
+                    {online && (
+                      <small data-testid="display-pending-online-payment">
+                        {onlineReady
+                          ? `Paiement en ligne reçu : ${cash(Number(online.amount), online.currency)} — prêt à valider${online.transaction_reference ? ` · réf. ${online.transaction_reference}` : ''}`
+                          : online.status === 'pending'
+                            ? `Paiement en ligne en cours : ${cash(Number(online.amount), online.currency)} (page de paiement ouverte)`
+                            : online.status === 'paid'
+                              ? `Paiement en ligne déjà encaissé${online.reconciled_at ? ` le ${dateLabel(online.reconciled_at)}` : ''}`
+                              : `Paiement en ligne : ${online.status}`}
+                      </small>
+                    )}
                   </div>
                 </div>
 
@@ -187,15 +232,40 @@ export default function AdminPendingPage() {
                   </p>
                 )}
 
+                {online?.status === 'pending' && (
+                  <p className="pending-admin-note is-info" data-testid="status-pending-online-waiting">
+                    <CreditCard size={13} /> Un paiement en ligne est en cours pour ce
+                    dossier : dès qu’il est confirmé, le bouton « Paiement reçu —
+                    valider et ouvrir » apparaît ici.
+                  </p>
+                )}
+
                 <div className="pending-admin-actions">
+                  {onlineReady ? (
+                    <Button
+                      type="button"
+                      onClick={() => void onActivatePaid(row)}
+                      disabled={busy}
+                      data-testid={`button-activate-paid-${row.slug ?? row.agency_id}`}
+                    >
+                      <CreditCard size={15} />
+                      {activatePaid.isPending ? 'Validation…' : 'Paiement reçu — valider et ouvrir'}
+                    </Button>
+                  ) : null}
+
                   <Button
                     type="button"
+                    variant={onlineReady ? 'outline' : undefined}
                     onClick={() => void onActivate(row)}
                     disabled={busy || activate.isPending}
                     data-testid={`button-activate-${row.slug ?? row.agency_id}`}
                   >
                     <BadgeCheck size={15} />
-                    {activate.isPending ? 'Validation…' : 'Valider et ouvrir le dashboard'}
+                    {activate.isPending
+                      ? 'Validation…'
+                      : onlineReady
+                        ? 'Valider sans paiement en ligne'
+                        : 'Valider et ouvrir le dashboard'}
                   </Button>
 
                   {rejecting === row.agency_id ? (

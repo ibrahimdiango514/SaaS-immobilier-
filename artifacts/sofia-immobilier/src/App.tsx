@@ -54,6 +54,9 @@ import { BackButton } from '@/components/back-button';
 import { trackRoute } from '@/lib/back-navigation';
 // BLOC 2 : ecran d'attente de validation (agence 'pending', dashboard ferme).
 import PendingValidationPage from '@/pages/pending';
+// SASPAY : retour de paiement — route AVANT le WorkspaceGate (une agence en
+// attente doit pouvoir confirmer son paiement d installation depuis SasPay).
+import PaymentReturnPage from '@/pages/payment-return';
 // BLOC 3 (session 2) : source unique d'acces aux modules selon l'offre.
 import {
   useActiveModuleAccess, moduleForRoute, ModuleLockedScreen, MODULE_LABELS,
@@ -1177,6 +1180,8 @@ function RoutedContent() {
   if (path === '/onboarding') return <OnboardingPage />;
   // Page publique : aucun compte requis, le jeton d'invitation fait foi.
   if (path === '/rejoindre') return <JoinAgencyPage />;
+  // SASPAY : retour de paiement hors WorkspaceGate (voir payment-return.tsx).
+  if (path === '/paiement/retour') return <PaymentReturnPage />;
   if (path === '/profil') return <ProfileRoute />;
   if (path === '/') return <HomeRedirect />;
   if (path === '/admin' || path.startsWith('/admin/')) {
