@@ -24,6 +24,9 @@ import {
   useAgencyPaymentAccess, useSubmitPaymentDeclaration, validateProofFile,
   type AgencyPaymentAccess, type PaymentDeclarationRow, type PaymentMethod,
 } from '@/lib/payments-api';
+// SASPAY : second canal de paiement (en ligne). Le manuel Orange Money / Wave
+// ci-dessous reste intact — c'est un ajout, jamais un remplacement.
+import { createSaspayCheckout, saspayErrorLabel, type SaspayPurpose } from '@/lib/saspay-api';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -304,12 +307,59 @@ function DeclarationDialog({
   );
 }
 
-export function PaymentSection({ agencyId }: { agencyId?: string }) {
+export function PaymentSection({
+  agencyId,
+  purpose = 'renewal',
+}: {
+  agencyId?: string;
+  purpose?: SaspayPurpose;
+}) {
   const access = useAgencyPaymentAccess(agencyId);
   const [open, setOpen] = useState(false);
+  const [onlinePending, setOnlinePending] = useState(false);
+  const [onlineError, setOnlineError] = useState('');
+  const [onlineUrl, setOnlineUrl] = useState('');
   const data = access.data;
   const declarations = useMemo(() => data?.declarations ?? [], [data]);
   const pending = declarations.filter((d) => describeDeclarationStatus(d.status) === 'pending');
+
+  // SASPAY : ouvre la page de paiement hébergée. L'intention est créée par le
+  // serveur (montants, idempotence, garde agence) — le navigateur ne fait que
+  // rediriger vers l'URL renvoyée.
+  // En iframe (preview intégrée), la navigation vers un site externe est
+  // bloquée par le navigateur (page blanche) : on ouvre un nouvel onglet.
+  // En onglet réel (usage normal / mobile), redirection directe fluide.
+  const startOnlinePayment = async () => {
+    if (!agencyId || onlinePending) return;
+    setOnlinePending(true);
+    setOnlineError('');
+    setOnlineUrl('');
+    try {
+      const intent = await createSaspayCheckout({ agencyId, purpose });
+      if (!intent.checkout_url) {
+        throw new Error('URL de paiement absente de la réponse du serveur.');
+      }
+      const url = intent.checkout_url;
+      const framed = window.top !== window.self;
+      if (!framed) {
+        setOnlinePending(false);
+        window.location.assign(url);
+        return;
+      }
+      const opened = window.open(url, '_blank');
+      if (opened) {
+        try { opened.opener = null; } catch { /* noop */ }
+        setOnlinePending(false);
+        return;
+      }
+      // Popup bloquée : bouton cliquable (geste utilisateur explicite).
+      setOnlineUrl(url);
+      setOnlinePending(false);
+    } catch (error) {
+      setOnlineError(saspayErrorLabel(error, 'démarrer le paiement en ligne'));
+      setOnlinePending(false);
+    }
+  };
 
   if (access.isLoading) return null;
   if (access.error || !data) {
@@ -325,18 +375,61 @@ export function PaymentSection({ agencyId }: { agencyId?: string }) {
     <section className="panel payment-panel" data-testid="panel-payment">
       <div className="panel-head">
         <div>
-          <h2><CreditCard size={17} /> Paiement de l’abonnement</h2>
-          <p>Déclarez un paiement Orange Money ou Wave, puis suivez sa validation.</p>
+          <h2>
+            <CreditCard size={17} />{' '}
+            <span data-testid="title-payment-panel">
+              {purpose === 'setup'
+                ? 'Frais d’installation et premier mois'
+                : 'Paiement de l’abonnement'}
+            </span>
+          </h2>
+          <p>
+            Payez en ligne (mobile money / carte) ou déclarez un paiement
+            Orange Money / Wave, puis suivez sa validation.
+          </p>
         </div>
-        <Button
-          className="primary-action"
-          onClick={() => setOpen(true)}
-          disabled={!data.can_manage}
-          data-testid="button-pay-subscription"
-        >
-          <CreditCard size={14} /> Payer mon abonnement
-        </Button>
+        <div className="panel-head-actions">
+          <Button
+            onClick={() => void startOnlinePayment()}
+            disabled={!data.can_manage || onlinePending}
+            data-testid="button-pay-online"
+          >
+            <CreditCard size={14} /> {onlinePending ? 'Ouverture…' : 'Payer en ligne'}
+          </Button>
+          <Button
+            className="primary-action"
+            onClick={() => setOpen(true)}
+            disabled={!data.can_manage}
+            data-testid="button-pay-subscription"
+          >
+            <CreditCard size={14} /> Déclarer un paiement
+          </Button>
+        </div>
       </div>
+
+      {onlineError && (
+        <div className="notice-box is-error" role="alert" data-testid="status-saspay-error" style={{ margin: '12px 19px 0' }}>
+          <AlertTriangle size={14} />
+          <span>{onlineError}</span>
+        </div>
+      )}
+
+      {onlineUrl && (
+        <div className="notice-box" role="status" data-testid="status-open-checkout" style={{ margin: '12px 19px 0' }}>
+          <CreditCard size={14} />
+          <span>
+            La page de paiement s’ouvre dans un nouvel onglet.{' '}
+            <a
+              href={onlineUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="button-open-checkout"
+            >
+              Ouvrir la page de paiement
+            </a>
+          </span>
+        </div>
+      )}
 
       {!data.can_manage && (
         <div className="permission-note" role="status" data-testid="status-payment-readonly">
