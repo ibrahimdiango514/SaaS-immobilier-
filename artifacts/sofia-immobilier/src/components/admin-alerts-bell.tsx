@@ -1,175 +1,245 @@
 // =============================================================================
-// BLOC 3 (session 3) — CLOCHE D'ALERTES ADMIN + CARTE « À TRAITER »
+// LOT 4 — Cloche d'Alertes Administrateur Temps Réel (Desktop & Android)
 // =============================================================================
-// Visible sur TOUTES les pages admin (mobile compris). Compteur, liste avec
-// titre / motif en une phrase / agence / date / couleur de priorité / action
-// directe, états non lu → traité, rafraîchissement toutes les 30 s.
-// =============================================================================
-import { useState } from 'react';
-import { AlertTriangle, Bell, CheckCheck, ChevronRight } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
+import { AlertTriangle, ArrowRight, Bell, Check, CheckCheck } from 'lucide-react';
 import {
+  ADMIN_ALERT_CATEGORY_LABELS,
   PRIORITY_LABELS,
   useAdminAlerts,
+  useAdminAlertsRealtime,
   useMarkAdminAlert,
   useMarkAllAdminAlerts,
   type AdminAlert,
 } from '@/lib/admin-alerts-api';
+import { formatDateTime } from '@/lib/workspace-ui';
 
-function priorityClass(priority: string) {
-  return `alert-pill alert-priority-${priority}`;
-}
-
-function AlertRow({ alert }: { alert: AdminAlert }) {
-  const mark = useMarkAdminAlert();
-  const [open, setOpen] = useState(false);
-  return (
-    <div
-      className={`admin-alert-row${alert.is_read ? ' is-read' : ' is-unread'}`}
-      data-testid={`admin-alert-${alert.id}`}
-    >
-      <div className="admin-alert-head">
-        <span className={priorityClass(alert.priority)}>{PRIORITY_LABELS[alert.priority] ?? alert.priority}</span>
-        <strong>{alert.title}</strong>
-        {!alert.is_read && <span className="notif-badge" aria-label="Non lue">•</span>}
-      </div>
-      <p className="admin-alert-reason">{alert.reason}</p>
-      <div className="admin-alert-meta">
-        {alert.agency_name && <span>{alert.agency_name}</span>}
-        <span>{new Date(alert.created_at).toLocaleString('fr-FR')}</span>
-      </div>
-      <div className="admin-alert-actions">
-        {alert.action_href && (
-          <Link href={alert.action_href} className="button-link" data-testid={`admin-alert-action-${alert.id}`}>
-            {alert.action_label ?? 'Ouvrir'} <ChevronRight size={13} />
-          </Link>
-        )}
-        <button
-          type="button"
-          className="text-action"
-          disabled={mark.isPending}
-          onClick={() => mark.mutate({ id: alert.id, read: !alert.is_read })}
-          data-testid={`admin-alert-toggle-${alert.id}`}
-        >
-          {alert.is_read ? 'Marquer non lue' : 'Marquer traitée'}
-        </button>
-        <button type="button" className="text-action" onClick={() => setOpen((v) => !v)}>
-          {open ? 'Moins' : 'Détail'}
-        </button>
-      </div>
-      {open && (
-        <pre className="admin-alert-detail">{JSON.stringify({ kind: alert.kind, priorité: alert.priority }, null, 2)}</pre>
-      )}
-    </div>
-  );
-}
-
-export function AdminAlertsBell() {
-  const alertsQ = useAdminAlerts();
+export function AdminAlertsBell({ testIdPrefix = '' }: { testIdPrefix?: string }) {
+  useAdminAlertsRealtime(true);
+  const alertsQ = useAdminAlerts(40);
+  const markOne = useMarkAdminAlert();
   const markAll = useMarkAllAdminAlerts();
   const [open, setOpen] = useState(false);
-  const payload = alertsQ.data;
-  const unread = payload?.unread ?? 0;
-  const unreadIds = (payload?.alerts ?? []).filter((a) => !a.is_read).map((a) => a.id);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  const unread = alertsQ.data?.unread ?? 0;
+  const critical = alertsQ.data?.critical ?? 0;
+  const alerts = alertsQ.data?.alerts ?? [];
+  const unreadIds = alerts.filter((a) => !a.is_read).map((a) => a.id);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const btnTestId = testIdPrefix ? `${testIdPrefix}-button-admin-alerts` : 'button-admin-alerts';
+  const badgeTestId = testIdPrefix ? `${testIdPrefix}-badge-admin-alerts` : 'badge-admin-alerts';
 
   return (
-    <div className="notif-wrap">
+    <div className="admin-alerts-bell" ref={wrapRef} data-testid="admin-alerts-bell">
       <button
         type="button"
-        className="icon-button notif-button"
+        className={`icon-button admin-alerts-trigger${critical > 0 ? ' is-critical' : unread > 0 ? ' has-unread' : ''}`}
         onClick={() => setOpen((v) => !v)}
-        aria-label={`Alertes administrateur (${unread} non lues)`}
+        aria-label={unread > 0 ? `${unread} alerte(s) non lue(s)` : 'Alertes plateforme'}
         aria-expanded={open}
-        data-testid="button-admin-alerts-bell"
+        title="Alertes plateforme (temps réel)"
+        data-testid={btnTestId}
       >
-        <Bell size={15} />
-        {unread > 0 && <span className="notif-badge" data-testid="count-admin-alerts">{unread > 9 ? '9+' : unread}</span>}
+        <Bell size={16} />
+        {unread > 0 && (
+          <em className="admin-alerts-badge" data-testid={badgeTestId}>
+            {unread > 99 ? '99+' : unread}
+          </em>
+        )}
       </button>
+
       {open && (
-        <div className="notif-panel admin-alerts-panel" role="dialog" aria-label="Alertes administrateur" data-testid="panel-admin-alerts">
-          <div className="notif-panel-head">
-            <strong>À traiter ({unread})</strong>
+        <div
+          className="admin-alerts-popover"
+          role="dialog"
+          aria-label="Alertes plateforme"
+          data-testid="popover-admin-alerts"
+        >
+          <header className="admin-alerts-head">
+            <div>
+              <strong>Alertes plateforme</strong>
+              <span>
+                {unread > 0
+                  ? `${unread} non lue(s)${critical > 0 ? ` · ${critical} haute(s)/critique(s)` : ''} · Bamako`
+                  : 'Tout est à jour · Bamako'}
+              </span>
+            </div>
             {unreadIds.length > 0 && (
               <button
                 type="button"
                 className="text-action"
+                onClick={() => markAll.mutate(null)}
                 disabled={markAll.isPending}
-                onClick={() => markAll.mutate(unreadIds)}
-                data-testid="button-admin-alerts-read-all"
+                data-testid="button-admin-alerts-mark-all"
               >
-                <CheckCheck size={13} /> Tout marquer traité
+                <CheckCheck size={13} /> Tout marquer lu
               </button>
             )}
+          </header>
+
+          <div className="admin-alerts-list">
+            {alertsQ.isLoading ? (
+              <p className="admin-alerts-empty">Analyse des signaux en cours…</p>
+            ) : alerts.length === 0 ? (
+              <p className="admin-alerts-empty">Aucune alerte enregistrée.</p>
+            ) : (
+              alerts.slice(0, 14).map((a) => (
+                <AlertRow
+                  key={a.id}
+                  alert={a}
+                  onMark={(read) => markOne.mutate({ id: a.id, read })}
+                  onNavigate={() => setOpen(false)}
+                />
+              ))
+            )}
           </div>
-          {alertsQ.isLoading ? (
-            <div className="notif-empty">Chargement…</div>
-          ) : alertsQ.error ? (
-            <div className="notif-empty" role="alert">
-              Impossible de charger les alertes : {(alertsQ.error as Error).message}
-            </div>
-          ) : (payload?.alerts ?? []).length ? (
-            <div className="notif-list">
-              {payload!.alerts.map((alert) => <AlertRow key={alert.id} alert={alert} />)}
-            </div>
-          ) : (
-            <div className="notif-empty">Aucune alerte. Tout est à jour.</div>
-          )}
-          <button type="button" className="notif-close" onClick={() => setOpen(false)}>Fermer</button>
+
+          <div className="sofia-notif-footer">
+            <Link
+              href="/admin/activite"
+              className="sofia-notif-center-link"
+              onClick={() => setOpen(false)}
+              data-testid="link-open-admin-alerts-center"
+            >
+              Ouvrir le centre de supervision & alertes <ArrowRight size={13} />
+            </Link>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-/** Carte « À traiter » affichée en haut de la vue d'ensemble admin. */
-export function AdminAlertsCard() {
-  const alertsQ = useAdminAlerts();
-  const payload = alertsQ.data;
-  const pending = (payload?.alerts ?? []).filter((alert) => !alert.is_read);
-
-  if (alertsQ.isLoading) return <div className="panel"><div className="notif-empty">Chargement des alertes…</div></div>;
-  if (alertsQ.error) {
-    return (
-      <section className="status-banner is-warn" role="alert" data-testid="status-admin-alerts-error">
-        <div className="status-banner-icon"><AlertTriangle size={15} /></div>
-        <div><strong>Alertes indisponibles</strong><p>{(alertsQ.error as Error).message}</p></div>
-      </section>
-    );
-  }
+function AlertRow({
+  alert,
+  onMark,
+  onNavigate,
+}: {
+  alert: AdminAlert;
+  onMark: (read: boolean) => void;
+  onNavigate: () => void;
+}) {
+  const catLabel = alert.category
+    ? ADMIN_ALERT_CATEGORY_LABELS[alert.category] ?? alert.category
+    : null;
 
   return (
-    <section className="panel admin-alerts-card" data-testid="panel-admin-alerts-summary">
-      <div className="panel-head">
-        <div>
-          <h2><Bell size={17} /> À traiter</h2>
-          <p>
-            {pending.length === 0
-              ? 'Aucune alerte en attente.'
-              : `${pending.length} alerte(s) en attente, dont ${payload?.critical ?? 0} prioritaire(s).`}
-          </p>
+    <div
+      className={`admin-alert-row is-${alert.priority}${alert.is_read ? ' is-read' : ''}`}
+      data-testid={`admin-alert-${alert.kind}`}
+    >
+      <div className="admin-alert-main">
+        <div className="admin-alert-meta">
+          <span className={`priority-pill is-${alert.priority}`}>
+            {alert.priority === 'critical' && <AlertTriangle size={11} />}
+            {PRIORITY_LABELS[alert.priority]}
+          </span>
+          {catLabel && <span className="sofia-cat-tag">{catLabel}</span>}
+          {alert.agency_name && <em>{alert.agency_name}</em>}
+          <time dateTime={alert.created_at}>{formatDateTime(alert.created_at)}</time>
         </div>
-        <Link href="/admin/agences" className="button-link" data-testid="link-admin-alerts-all">Voir les agences</Link>
+        <strong>{alert.title}</strong>
+        <p>{alert.reason}</p>
+        <div className="admin-alert-actions">
+          {alert.action_href && (
+            <Link
+              href={alert.action_href}
+              className="text-action"
+              onClick={() => {
+                if (!alert.is_read) onMark(true);
+                onNavigate();
+              }}
+              data-testid={`admin-alert-action-${alert.id}`}
+            >
+              {alert.action_label ?? 'Ouvrir'} <ArrowRight size={12} />
+            </Link>
+          )}
+          <button
+            type="button"
+            className="text-action muted"
+            onClick={() => onMark(!alert.is_read)}
+            data-testid={`admin-alert-toggle-${alert.id}`}
+          >
+            <Check size={12} /> {alert.is_read ? 'Marquer non lu' : 'Marquer lu'}
+          </button>
+        </div>
       </div>
-      {pending.length > 0 && (
-        <div className="admin-alerts-summary-list">
-          {pending.slice(0, 5).map((alert) => (
-            <div className="admin-alert-row is-unread" key={alert.id} data-testid={`admin-alert-summary-${alert.id}`}>
-              <div className="admin-alert-head">
-                <span className={priorityClass(alert.priority)}>{PRIORITY_LABELS[alert.priority] ?? alert.priority}</span>
-                <strong>{alert.title}</strong>
-              </div>
-              <p className="admin-alert-reason">{alert.reason}</p>
-              <div className="admin-alert-actions">
-                {alert.action_href && (
-                  <Link href={alert.action_href} className="button-link">
-                    {alert.action_label ?? 'Ouvrir'} <ChevronRight size={13} />
-                  </Link>
-                )}
-              </div>
-            </div>
-          ))}
+    </div>
+  );
+}
+
+/** Carte synthèse pour la vue d'ensemble admin : uniquement les alertes non lues importantes. */
+export function AdminAlertsSummaryCard() {
+  useAdminAlertsRealtime(true);
+  const alertsQ = useAdminAlerts(30);
+  const markOne = useMarkAdminAlert();
+  const unreadImportant = (alertsQ.data?.alerts ?? [])
+    .filter((a) => !a.is_read && (a.priority === 'critical' || a.priority === 'high'))
+    .slice(0, 5);
+
+  if (alertsQ.isLoading || unreadImportant.length === 0) return null;
+
+  return (
+    <section
+      className="panel-card admin-alerts-summary"
+      aria-label="Alertes prioritaires"
+      data-testid="card-admin-alerts-summary"
+    >
+      <div className="admin-section-head">
+        <div>
+          <span className="eyebrow">À traiter en priorité</span>
+          <h2>
+            {unreadImportant.length} alerte{unreadImportant.length > 1 ? 's' : ''} en attente d’action
+          </h2>
         </div>
-      )}
+        <Link href="/admin/activite" className="text-action">
+          Centre d’alertes <ArrowRight size={13} />
+        </Link>
+      </div>
+      <div className="admin-alerts-summary-list">
+        {unreadImportant.map((a) => (
+          <div key={a.id} className={`admin-alert-summary-item is-${a.priority}`}>
+            <div>
+              <span className={`priority-pill is-${a.priority}`}>{PRIORITY_LABELS[a.priority]}</span>
+              <strong>{a.title}</strong>
+              <p>{a.reason}</p>
+            </div>
+            <div className="admin-alert-summary-cta">
+              {a.action_href && (
+                <Link
+                  href={a.action_href}
+                  className="secondary-button"
+                  onClick={() => markOne.mutate({ id: a.id, read: true })}
+                >
+                  {a.action_label ?? 'Ouvrir'} <ArrowRight size={13} />
+                </Link>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
+
+export const AdminAlertsCard = AdminAlertsSummaryCard;

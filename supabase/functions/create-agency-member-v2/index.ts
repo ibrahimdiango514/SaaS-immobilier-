@@ -1,20 +1,9 @@
 // CREATION DIRECTE d'un membre d'agence, sans SMTP.
-//
-// Cette fonction est le slug "create-agency-member-v2". L'ancien slug
-// "create-agency-member" restait bloque sur un BOOT_ERROR du runtime Supabase
-// ("Function failed to start") : le meme code, redeploye sous ce slug, ne
-// demarrait jamais, alors qu'il demarre sous un slug neuf. Ce n'etait donc pas
-// une erreur de code mais un artefact de deploiement corrompu cote plateforme.
-// La source ci-dessous est volontairement en ASCII pur.
-//
-// SECURITE - verify_jwt est desactive cote plateforme.
-// Le preflight CORS (OPTIONS) ne porte jamais d'en-tete Authorization : la
-// passerelle le rejetait avant d'executer ce code, le navigateur bloquait
-// l'appel, et le client ne recevait qu'un "Failed to send a request to the Edge
-// Function" sans statut ni message. Aucune protection n'est perdue ici :
-// la fonction exige un Bearer, valide le jeton avec auth.getUser() et verifie
-// l'appartenance a l'agence avec has_agency_role().
-import { createClient } from 'npm:@supabase/supabase-js@2'
+// Slug : "create-agency-member-v2" (verify_jwt = false cote passerelle pour laisser
+// passer le preflight CORS OPTIONS ; authentification stricte via auth.getUser()
+// + controle d'autorisation serveur via has_agency_role).
+// Source autonome en ASCII pur, sans import relatif.
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -31,14 +20,61 @@ function json(payload: unknown, status = 200) {
 
 const allowedRoles = new Set(['admin', 'agent'])
 const MIN_PASSWORD_LENGTH = 8
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function generateTempPassword() {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
-  const bytes = new Uint8Array(12)
+const LOWER = 'abcdefghijkmnopqrstuvwxyz'
+const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+const DIGITS = '23456789'
+const ALL = UPPER + LOWER + DIGITS
+
+function generateTempPassword(length = 12): string {
+  const bytes = new Uint8Array(length)
+  const shuffle = new Uint8Array(length)
   crypto.getRandomValues(bytes)
-  let out = ''
-  for (const b of bytes) out += alphabet[b % alphabet.length]
-  return out
+  crypto.getRandomValues(shuffle)
+
+  const pick = (alphabet: string, byte: number) => alphabet.charAt(byte % alphabet.length)
+  const chars = [pick(UPPER, bytes[0]), pick(LOWER, bytes[1]), pick(DIGITS, bytes[2])]
+  for (let i = 3; i < length; i += 1) chars.push(pick(ALL, bytes[i]))
+  for (let i = length - 1; i > 0; i -= 1) {
+    const j = shuffle[i] % (i + 1)
+    const tmp = chars[i]
+    chars[i] = chars[j]
+    chars[j] = tmp
+  }
+  return chars.join('')
+}
+
+async function isAuthorizedManager(
+  callerClient: SupabaseClient,
+  admin: SupabaseClient,
+  agencyId: string,
+  callerId: string,
+): Promise<{ ok: boolean; details: string | null }> {
+  const { data, error } = await callerClient.rpc('has_agency_role', {
+    target_agency_id: agencyId,
+    required_role: 'admin',
+  })
+  if (!error) return { ok: data === true, details: null }
+
+  const { data: membership } = await admin
+    .schema('saas_immobilier')
+    .from('agency_members')
+    .select('role, status')
+    .eq('agency_id', agencyId)
+    .eq('user_id', callerId)
+    .maybeSingle()
+  if (membership && membership.status === 'active' && ['owner', 'admin'].includes(membership.role)) {
+    return { ok: true, details: null }
+  }
+  const { data: platformAdmin } = await admin
+    .schema('saas_immobilier')
+    .from('platform_admins')
+    .select('role, status')
+    .eq('user_id', callerId)
+    .eq('status', 'active')
+    .maybeSingle()
+  return { ok: Boolean(platformAdmin), details: error.message }
 }
 
 Deno.serve(async (request) => {
@@ -53,18 +89,28 @@ Deno.serve(async (request) => {
   const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   if (!url || !anon || !service) return json({ error: 'server_configuration_error' }, 500)
 
-  let body: any
-  try { body = await request.json() } catch { return json({ error: 'invalid_json' }, 400) }
+  let body: Record<string, unknown>
+  try {
+    body = (await request.json()) as Record<string, unknown>
+  } catch {
+    return json({ error: 'invalid_json' }, 400)
+  }
 
   const agencyId = String(body.agency_id ?? '').trim()
   const fullName = String(body.full_name ?? '').trim()
-  const email = String(body.email ?? '').trim().toLowerCase()
+  const email = String(body.email ?? '').replace(/\s+/g, '').toLowerCase()
   const role = String(body.role ?? '').trim().toLowerCase()
   const phone = String(body.phone ?? '').trim() || undefined
-  const tempPassword = typeof body.temp_password === 'string' ? body.temp_password : generateTempPassword()
+  const tempPassword =
+    typeof body.temp_password === 'string' && body.temp_password.trim().length > 0
+      ? body.temp_password.trim()
+      : generateTempPassword()
 
   if (!agencyId || !fullName || !email || !role) {
     return json({ error: 'agency_context_full_name_email_and_role_are_required' }, 400)
+  }
+  if (!EMAIL_RE.test(email)) {
+    return json({ error: 'invalid_email', details: 'Adresse e-mail invalide.' }, 400)
   }
   if (!allowedRoles.has(role)) return json({ error: 'role_not_allowed' }, 400)
   if (tempPassword.length < MIN_PASSWORD_LENGTH) {
@@ -83,22 +129,35 @@ Deno.serve(async (request) => {
   if (callerError || !caller) return json({ error: 'authentication_required' }, 401)
 
   // 2. Proprietaire ou administrateur de CETTE agence (le JWT fait foi)
-  const { data: allowed, error: allowedError } = await callerClient.rpc('has_agency_role', {
-    target_agency_id: agencyId,
-    required_role: 'admin',
-  })
-  if (allowedError || allowed !== true) {
-    return json({ error: 'agency_admin_or_owner_required', details: allowedError?.message ?? null }, 403)
+  const managerCheck = await isAuthorizedManager(callerClient, admin, agencyId, caller.id)
+  if (!managerCheck.ok) {
+    return json({ error: 'agency_admin_or_owner_required', details: managerCheck.details }, 403)
   }
 
-  // 3. Agence non suspendue (RPC public.agence_active attend p_agency_id)
+  // 3. Agence active ou en essai ('active' / 'trial')
   const { data: active, error: activeError } = await callerClient.rpc('agence_active', { p_agency_id: agencyId })
   if (activeError) {
-    return json({ error: 'agency_status_check_failed', details: activeError.message, code: activeError.code ?? null }, 500)
+    const { data: agencyRow, error: agencyFetchError } = await admin
+      .schema('saas_immobilier')
+      .from('agencies')
+      .select('status')
+      .eq('id', agencyId)
+      .maybeSingle()
+    if (agencyFetchError) {
+      return json({
+        error: 'agency_status_check_failed',
+        details: activeError.message,
+        code: activeError.code ?? null,
+      }, 500)
+    }
+    if (!agencyRow || !['active', 'trial'].includes(String(agencyRow.status))) {
+      return json({ error: 'agency_suspended' }, 403)
+    }
+  } else if (active !== true) {
+    return json({ error: 'agency_suspended' }, 403)
   }
-  if (active !== true) return json({ error: 'agency_suspended' }, 403)
 
-  // 4. Limite de places (membres actifs + invitations en attente)
+  // 4. Limite de places
   const { data: seats, error: seatsError } = await callerClient.rpc('agency_seat_availability', {
     p_agency_id: agencyId,
   })
@@ -112,7 +171,7 @@ Deno.serve(async (request) => {
     }, 409)
   }
 
-  // 5. Compte Auth avec mot de passe temporaire (pas de SMTP)
+  // 5. Compte Auth avec mot de passe temporaire (sans SMTP)
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
     password: tempPassword,
@@ -132,16 +191,46 @@ Deno.serve(async (request) => {
     }, taken ? 409 : 502)
   }
 
-  // 6. Rattachement a l'agence - UNIQUEMENT cette agence
+  const createdUserId = created.user.id
+
+  // 6. Garantit user_profiles AVANT le rattachement agency_members (clé étrangère)
+  //    et force must_change_password = true pour la premiere connexion.
+  const profilePayload: Record<string, unknown> = {
+    id: createdUserId,
+    role: 'agency',
+    must_change_password: true,
+    email,
+    full_name: fullName,
+  }
+  if (phone) profilePayload.phone = phone
+
+  const { error: upsertProfileError } = await admin
+    .schema('saas_immobilier')
+    .from('user_profiles')
+    .upsert(profilePayload, { onConflict: 'id' })
+
+  if (upsertProfileError) {
+    await admin.auth.admin.deleteUser(createdUserId)
+    console.error('user_profile_flag_failed', {
+      message: upsertProfileError.message,
+      code: upsertProfileError.code,
+    })
+    return json({
+      error: 'user_profile_flag_failed',
+      details: upsertProfileError.message,
+      code: upsertProfileError.code ?? null,
+    }, 500)
+  }
+
+  // 7. Rattachement a l'agence - UNIQUEMENT cette agence
   const { data: membership, error: membershipError } = await admin.rpc('create_agency_member', {
     p_actor_user_id: caller.id,
     p_agency_id: agencyId,
-    p_invited_user_id: created.user.id,
+    p_invited_user_id: createdUserId,
     p_role: role,
   })
   if (membershipError) {
-    // Compensation : on ne laisse pas un compte orphelin.
-    const { error: compensationError } = await admin.auth.admin.deleteUser(created.user.id)
+    const { error: compensationError } = await admin.auth.admin.deleteUser(createdUserId)
     console.error('agency_member_provisioning_failed', {
       message: membershipError.message,
       compensation_failed: Boolean(compensationError),
@@ -153,18 +242,17 @@ Deno.serve(async (request) => {
     }, 500)
   }
 
-  // 7a. Le statut par defaut est 'invited' : is_agency_member et has_agency_role
-  //     n'acceptent que 'active'. Une creation directe vaut acces immediat.
+  // 8. Garantit status = 'active' (acces immediat)
   const { data: activatedRows, error: activateError } = await admin
     .schema('saas_immobilier')
     .from('agency_members')
     .update({ status: 'active' })
     .eq('agency_id', agencyId)
-    .eq('user_id', created.user.id)
+    .eq('user_id', createdUserId)
     .select('id')
 
   if (activateError || !activatedRows || activatedRows.length === 0) {
-    const { error: compensationError } = await admin.auth.admin.deleteUser(created.user.id)
+    const { error: compensationError } = await admin.auth.admin.deleteUser(createdUserId)
     console.error('agency_member_activation_failed', {
       message: activateError?.message ?? 'no row updated',
       compensation_failed: Boolean(compensationError),
@@ -176,54 +264,37 @@ Deno.serve(async (request) => {
     }, 500)
   }
 
-  // 7b. Drapeau must_change_password dans user_profiles (lu par App.tsx).
-  //     Le trigger handle_new_user_profile cree la ligne avec la valeur false.
-  const profilePayload: Record<string, unknown> = {
-    must_change_password: true,
-    email,
-    full_name: fullName,
-  }
-  if (phone) profilePayload.phone = phone
+  // 9. Journal d'activite (echec tolere)
+  const membershipId = activatedRows[0]?.id ?? null
+  await admin.schema('saas_immobilier').from('activity_log').insert({
+    agency_id: agencyId,
+    user_id: caller.id,
+    action: 'created',
+    entity_type: 'agency_members',
+    entity_id: membershipId,
+    summary: `Acces cree pour ${fullName} (${email}) avec le role ${role}`,
+    metadata: {
+      table: 'agency_members',
+      op: 'INSERT',
+      invited_user_id: createdUserId,
+      invited_email: email,
+      role,
+      must_change_password: true,
+    },
+  }).then(() => undefined, () => undefined)
 
-  const profiles = admin.schema('saas_immobilier').from('user_profiles')
-  const { data: profileRows, error: profileError } = await profiles
-    .update(profilePayload)
-    .eq('id', created.user.id)
-    .select('id')
+  // 10. Compteur de places rafraichi apres creation
+  const { data: freshSeats } = await callerClient.rpc('agency_seat_availability', {
+    p_agency_id: agencyId,
+  })
 
-  let profileAction = 'updated'
-  if (!profileError && (!profileRows || profileRows.length === 0)) {
-    // La ligne n'a pas ete creee par le trigger : on l'insere.
-    const { error: insertError } = await admin
-      .schema('saas_immobilier')
-      .from('user_profiles')
-      .insert({ id: created.user.id, role: 'agency', ...profilePayload })
-    if (insertError) {
-      console.error('user_profile_flag_failed', { message: insertError.message, code: insertError.code })
-      return json({
-        error: 'user_profile_flag_failed',
-        details: insertError.message,
-        code: insertError.code ?? null,
-      }, 500)
-    }
-    profileAction = 'inserted'
-  } else if (profileError) {
-    console.error('user_profile_flag_failed', { message: profileError.message, code: profileError.code })
-    return json({
-      error: 'user_profile_flag_failed',
-      details: profileError.message,
-      code: profileError.code ?? null,
-    }, 500)
-  }
-
-  // Le mot de passe temporaire n'est renvoye qu'ici, une seule fois.
   return json({
     membership: Array.isArray(membership) ? membership[0] : membership,
     membership_status: 'active',
-    user_profile: profileAction,
+    user_profile: 'upserted',
     invited_email: email,
     temp_password: tempPassword,
     must_change_password: true,
-    seats: seatsInfo,
+    seats: freshSeats ?? seatsInfo,
   }, 201)
 })

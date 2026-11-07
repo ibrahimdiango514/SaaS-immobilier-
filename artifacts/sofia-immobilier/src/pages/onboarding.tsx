@@ -1,35 +1,52 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
-import { ArrowLeft, ArrowRight, Building2, CheckCircle2, ImagePlus, MapPin, Phone, ShieldCheck, Sparkles, X } from 'lucide-react';
-import { BackButton } from '@/components/back-button';
-import { useAllPlans, type PlanRow } from '@/lib/plan-limits';
-import { cash } from '@/lib/workspace-ui';
-
-/** Libellés français des modules, identiques à la page Mon offre. */
-const MODULE_LABELS: Record<string, string> = {
-  biens: 'Biens immobiliers', contacts: 'Prospects et contacts',
-  pipeline: 'Pipeline commercial', visites: 'Visites', whatsapp: 'WhatsApp',
-  automatisations: 'Automatisations', assistant_ia: 'Assistant IA',
-  ca_filters: 'CA avec filtres', ca_export_csv: 'Export CSV du CA',
-  stats: 'Statistiques avancées', rapports: 'Rapports mensuels',
-  support: 'Support prioritaire',
-};
+import {
+  ArrowLeft, ArrowRight, Building2, CheckCircle2, ImagePlus, MapPin, Phone,
+  ShieldCheck, Sparkles, Wrench, X,
+} from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
+import { BackButton } from '@/components/back-button';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useAuth } from '@/lib/auth-context';
-// BLOC 4 : regles logo partagees (PNG/JPG/WebP, 2 Mo).
 import { validateLogoFile } from '@/lib/agency-logo';
 import { useAgency } from '@/lib/agency-context';
 import { useCreateAgency } from '@/lib/data-hooks';
-// BLOC 2 (session 3) : essai gratuit de 14 jours.
-import { startAgencyTrial, type StartTrialResult } from '@/lib/trial-api';
+import {
+  clearSignupSelectedPlanId,
+  loadSignupSelectedPlanId,
+  saveSignupSelectedPlanId,
+  usePublicPlansCatalog,
+} from '@/lib/pending-api';
 import { getSupabaseErrorMessage } from '@/lib/supabase';
-import { BrandMark } from '@/lib/workspace-ui';
+import { BrandMark, cash } from '@/lib/workspace-ui';
+
+/** Libellés français des modules, identiques à la page Mon offre. */
+const MODULE_LABELS: Record<string, string> = {
+  biens: 'Biens immobiliers',
+  contacts: 'Prospects et contacts',
+  pipeline: 'Pipeline commercial',
+  dashboard: 'Tableau de bord',
+  ca_chart: 'Graphique du CA',
+  visites: 'Visites',
+  visits: 'Visites',
+  whatsapp: 'WhatsApp',
+  automatisations: 'Automatisations',
+  automations: 'Automatisations',
+  assistant_ia: 'Assistant IA',
+  assistant: 'Assistant IA',
+  ca_filters: 'CA avec filtres',
+  ca_export_csv: 'Export CSV du CA',
+  stats: 'Statistiques avancées',
+  rapports: 'Rapports mensuels',
+  rapports_mensuels: 'Rapports mensuels',
+  payments: 'Paiements',
+  support: 'Support prioritaire',
+};
 
 const onboardingSchema = z.object({
   name: z.string().trim().min(2, 'Le nom de l’agence est obligatoire (2 caractères minimum)'),
@@ -46,20 +63,18 @@ const STEPS = [
   { key: 'identity', title: 'Votre agence', subtitle: 'Nom et raison sociale', icon: Building2 },
   { key: 'contact', title: 'Coordonnées', subtitle: 'Téléphone, adresse, ville', icon: Phone },
   { key: 'branding', title: 'Présentation', subtitle: 'Logo et description', icon: ImagePlus },
-  // BLOC 2 (session 2) : choix de l'offre AVANT la creation. L'agence est creee
-  // 'pending' et sans abonnement : c'est ce choix qui est enregistre dans
-  // agencies.pending_plan_id, puis soumis a validation par l'administrateur.
-  { key: 'plan', title: 'Votre offre', subtitle: 'Comparatif des 3 offres', icon: Sparkles },
-  { key: 'review', title: 'Confirmation', subtitle: 'Vérifiez puis créez', icon: CheckCircle2 },
+  { key: 'plan', title: 'Votre offre *', subtitle: 'Essentiel, Pro ou Premium', icon: Sparkles },
+  { key: 'review', title: 'Confirmation', subtitle: 'Vérifiez puis enregistrez', icon: CheckCircle2 },
 ];
 
+const unlimited = (value: number) => value >= 1_000_000_000;
+
 export default function OnboardingPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, signOut } = useAuth();
   const { memberships, loading: agencyLoading } = useAgency();
   const createAgency = useCreateAgency();
-  // BLOC 2 (session 2) : offre choisie pendant l'inscription.
-  const plans = useAllPlans();
-  const [chosenPlanId, setChosenPlanId] = useState<string | null>(null);
+  const plans = usePublicPlansCatalog();
+  const [chosenPlanId, setChosenPlanId] = useState<string | null>(() => loadSignupSelectedPlanId());
   const [, navigate] = useLocation();
   const [step, setStep] = useState(0);
   const [logo, setLogo] = useState<File | null>(null);
@@ -68,8 +83,22 @@ export default function OnboardingPage() {
 
   const form = useForm<OnboardingValues>({
     resolver: zodResolver(onboardingSchema),
-    defaultValues: { name: '', legal_name: '', phone: '', email: '', address: '', city: 'Bamako', description: '' },
+    defaultValues: {
+      name: '',
+      legal_name: '',
+      phone: '',
+      email: user?.email ?? '',
+      address: '',
+      city: 'Bamako',
+      description: '',
+    },
   });
+
+  useEffect(() => {
+    if (user?.email && !form.getValues('email')) {
+      form.setValue('email', user.email);
+    }
+  }, [user?.email, form]);
 
   useEffect(() => {
     if (loading) return;
@@ -82,11 +111,21 @@ export default function OnboardingPage() {
     }
   }, [loading, user, agencyLoading, memberships, navigate]);
 
+  useEffect(() => {
+    if (chosenPlanId) {
+      saveSignupSelectedPlanId(chosenPlanId);
+    }
+  }, [chosenPlanId]);
+
   useEffect(() => () => {
     if (logoPreview) URL.revokeObjectURL(logoPreview);
   }, [logoPreview]);
 
   const progress = useMemo(() => `${((step + 1) / STEPS.length) * 100}%`, [step]);
+  const selectedPlan = useMemo(
+    () => (plans.data ?? []).find((p) => p.id === chosenPlanId) ?? null,
+    [plans.data, chosenPlanId],
+  );
 
   const goNext = async () => {
     setFormError('');
@@ -94,12 +133,18 @@ export default function OnboardingPage() {
       ['name'],
       ['city'],
       [],
-      [], // etape « Votre offre » : aucun champ du formulaire, choix dans plans
+      [],
       [],
     ];
     const fields = fieldsByStep[step];
     const valid = fields.length ? await form.trigger(fields) : true;
     if (!valid) return;
+
+    if (step === 3 && !chosenPlanId) {
+      setFormError('Le choix d’une offre (Essentiel, Pro ou Premium) est obligatoire pour continuer.');
+      return;
+    }
+
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
 
@@ -110,9 +155,15 @@ export default function OnboardingPage() {
 
   const submit = async (values: OnboardingValues) => {
     setFormError('');
+    if (!chosenPlanId) {
+      setFormError('Veuillez sélectionner une offre (Essentiel, Pro ou Premium) avant d’enregistrer votre agence.');
+      setStep(3);
+      return;
+    }
     try {
-      const result = await createAgency.mutateAsync({
+      await createAgency.mutateAsync({
         name: values.name,
+        plan_id: chosenPlanId,
         legal_name: values.legal_name || null,
         phone: values.phone || null,
         email: values.email || null,
@@ -121,37 +172,20 @@ export default function OnboardingPage() {
         description: values.description || null,
         logo,
       });
-      // BLOC 2 (session 3) — ESSAI GRATUIT.
-      // L'agence est créée, puis l'offre choisie démarre IMMÉDIATEMENT l'essai
-      // de 14 jours (`agency_start_trial`). Si l'administrateur a activé
-      // « validation requise avant ouverture », la fonction renvoie
-      // mode='pending_validation' et l'agence reste sur l'écran d'attente.
-      // Un échec n'est pas bloquant : l'écran d'attente permet de réessayer.
-      const created = result as unknown as { id?: string };
-      if (chosenPlanId && created?.id) {
-        try {
-          const trial: StartTrialResult = await startAgencyTrial(created.id, chosenPlanId);
-          if (trial.mode === 'pending_validation') {
-            setFormError('');
-          }
-        } catch (planError) {
-          console.warn('essai_non_demarre', planError);
-          setFormError(
-            `Agence créée, mais l’essai n’a pas pu démarrer : ${getSupabaseErrorMessage(planError, 'démarrer l’essai')}`,
-          );
-        }
-      }
-      // /dashboard : une agence en essai y accède directement ; une agence
-      // « pending » voit l'écran d'attente de validation.
+      clearSignupSelectedPlanId();
+      // L'agence est créée en statut `pending` : WorkspaceGate affiche l'écran
+      // d'attente d'installation physique et d'activation administrative.
       navigate('/dashboard');
     } catch (error) {
-      const message = getSupabaseErrorMessage(error, 'créer l’agence');
+      const message = getSupabaseErrorMessage(error, 'enregistrer le dossier de l’agence');
       setFormError(
         message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('slug')
           ? 'Une agence portant ce nom existe déjà. Choisissez un autre nom.'
           : message,
       );
-      setStep(1);
+      if (message.toLowerCase().includes('offre')) {
+        setStep(3);
+      }
     }
   };
 
@@ -169,10 +203,22 @@ export default function OnboardingPage() {
   return (
     <div className="onboarding-page">
       <header className="onboarding-header">
-        {/* BLOC 9 : retour explicite, cible 44 px, visible sur mobile. */}
-        <BackButton to="/dashboard" label="Revenir à mon espace" testId="button-back-onboarding" />
-        <div className="brand-lockup"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">Création de votre agence</div></div></div>
-        <button type="button" className="text-action" onClick={() => navigate('/dashboard')} data-testid="button-skip-onboarding">Plus tard</button>
+        <BackButton to="/login" label="Retour" testId="button-back-onboarding" />
+        <div className="brand-lockup">
+          <BrandMark />
+          <div>
+            <div className="brand-name">sofia immobilier</div>
+            <div className="brand-caption">Dossier d’inscription de votre agence</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="text-action"
+          onClick={() => void signOut()}
+          data-testid="button-signout-onboarding"
+        >
+          Se déconnecter
+        </button>
       </header>
 
       <main className="onboarding-main">
@@ -181,7 +227,9 @@ export default function OnboardingPage() {
           <ol className="onboarding-steps">
             {STEPS.map((item, index) => (
               <li key={item.key} className={index === step ? 'is-current' : index < step ? 'is-done' : ''}>
-                <span className="onboarding-step-icon">{index < step ? <CheckCircle2 size={15} /> : <item.icon size={15} />}</span>
+                <span className="onboarding-step-icon">
+                  {index < step ? <CheckCircle2 size={15} /> : <item.icon size={15} />}
+                </span>
                 <div><strong>{item.title}</strong><small>{item.subtitle}</small></div>
               </li>
             ))}
@@ -193,9 +241,9 @@ export default function OnboardingPage() {
             <form onSubmit={form.handleSubmit(submit)} className="onboarding-form">
               {step === 0 && (
                 <div className="onboarding-step">
-                  <span className="form-kicker">Étape 1 sur 4</span>
+                  <span className="form-kicker">Étape 1 sur 5</span>
                   <h1>Comment s’appelle votre agence ?</h1>
-                  <p>Ce nom apparaîtra dans votre espace de travail et sur vos documents.</p>
+                  <p>Ce nom apparaîtra dans votre espace de travail et sur votre dossier d’installation.</p>
                   <FormField control={form.control} name="name" render={({ field }) => (
                     <FormItem><FormLabel>Nom commercial de l’agence *</FormLabel><FormControl>
                       <Input {...field} placeholder="Ex. Immo Bamako Conseil" data-testid="input-onboarding-name" autoFocus />
@@ -211,9 +259,9 @@ export default function OnboardingPage() {
 
               {step === 1 && (
                 <div className="onboarding-step">
-                  <span className="form-kicker">Étape 2 sur 4</span>
-                  <h1>Où vous joindre ?</h1>
-                  <p>Ces coordonnées restent visibles uniquement par votre équipe.</p>
+                  <span className="form-kicker">Étape 2 sur 5</span>
+                  <h1>Où intervenir pour l’installation ?</h1>
+                  <p>Ces coordonnées permettent à notre équipe de planifier le déploiement physique de votre agence.</p>
                   <div className="form-grid">
                     <FormField control={form.control} name="phone" render={({ field }) => (
                       <FormItem><FormLabel>Téléphone</FormLabel><FormControl>
@@ -227,8 +275,8 @@ export default function OnboardingPage() {
                     )} />
                   </div>
                   <FormField control={form.control} name="address" render={({ field }) => (
-                    <FormItem><FormLabel>Adresse</FormLabel><FormControl>
-                      <Input {...field} placeholder="Quartier, rue, repère…" data-testid="input-onboarding-address" />
+                    <FormItem><FormLabel>Adresse physique</FormLabel><FormControl>
+                      <Input {...field} placeholder="Quartier, rue, immeuble, repère…" data-testid="input-onboarding-address" />
                     </FormControl><FormMessage /></FormItem>
                   )} />
                   <FormField control={form.control} name="city" render={({ field }) => (
@@ -241,14 +289,19 @@ export default function OnboardingPage() {
 
               {step === 2 && (
                 <div className="onboarding-step">
-                  <span className="form-kicker">Étape 3 sur 4</span>
+                  <span className="form-kicker">Étape 3 sur 5</span>
                   <h1>Présentez votre agence</h1>
                   <p>Logo (JPG, PNG ou WebP — 2 Mo max., redimensionné automatiquement) et description courte.</p>
                   <div className="logo-picker">
                     {logoPreview ? (
                       <div className="logo-preview">
                         <img src={logoPreview} alt="Aperçu du logo" />
-                        <button type="button" className="icon-button" onClick={() => { setLogo(null); setLogoPreview(null); }} aria-label="Retirer le logo">
+                        <button
+                          type="button"
+                          className="icon-button"
+                          onClick={() => { setLogo(null); setLogoPreview(null); }}
+                          aria-label="Retirer le logo"
+                        >
                           <X size={14} />
                         </button>
                       </div>
@@ -260,7 +313,6 @@ export default function OnboardingPage() {
                           onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            // BLOC 4 : mêmes règles que les Paramètres.
                             const invalid = validateLogoFile(file);
                             if (invalid) {
                               setFormError(invalid);
@@ -285,32 +337,28 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* BLOC 2 (session 2) : comparatif des 3 offres. */}
               {step === 3 && (
                 <section className="onboarding-plan-step" data-testid="step-choose-plan">
                   <header className="onboarding-step-head">
-                    <h2>Choisissez votre offre</h2>
+                    <span className="form-kicker">Étape 4 sur 5 · Choix obligatoire</span>
+                    <h2>Choisissez votre offre *</h2>
                     <p>
-                      Votre tableau de bord s’ouvre <strong>immédiatement en essai
-                      gratuit de 14 jours</strong> avec les fonctionnalités et les
-                      limites de l’offre choisie. Aucun paiement n’est demandé
-                      pendant l’essai, et les jours d’essai ne sont pas déduits de
-                      votre première période payante. Vous pouvez changer d’offre
-                      pendant l’essai sans validation.
+                      Les frais d’installation sont encaissés <strong>physiquement lors de la mise en service sur site</strong>{' '}
+                      (hors paiement en ligne). Dès l’activation par l’administrateur, vous bénéficiez de{' '}
+                      <strong>14 jours d’essai gratuit</strong> avec 100 % des fonctionnalités et quotas de votre offre.
+                      L’abonnement mensuel ne démarre qu’à la fin des 14 jours d’essai.
                     </p>
                   </header>
                   {plans.isLoading ? (
                     <p className="form-hint">Chargement des offres…</p>
                   ) : plans.error ? (
                     <p className="form-feedback is-error" role="alert">
-                      Impossible de charger les offres. Vous pourrez choisir votre
-                      offre à l’étape suivante.
+                      Impossible de charger les offres : {getSupabaseErrorMessage(plans.error, 'charger les offres')}
                     </p>
                   ) : (
                     <div className="plan-grid" role="radiogroup" aria-label="Offres disponibles">
                       {(plans.data ?? []).map((plan) => {
                         const isChosen = chosenPlanId === plan.id;
-                        const total = Number(plan.setup_fee ?? 0) + Number(plan.price_monthly);
                         return (
                           <button
                             type="button"
@@ -318,24 +366,42 @@ export default function OnboardingPage() {
                             role="radio"
                             aria-checked={isChosen}
                             className={`plan-card is-selectable${isChosen ? ' is-chosen' : ''}`}
-                            onClick={() => setChosenPlanId(plan.id)}
+                            onClick={() => {
+                              setChosenPlanId(plan.id);
+                              setFormError('');
+                            }}
                             data-testid={`button-onboarding-plan-${plan.name}`}
                           >
                             <header>
-                              <strong>{plan.display_name ?? plan.name}</strong>
+                              <strong>{plan.display_name}</strong>
                               {isChosen && <span className="status-tag">Choisie</span>}
                             </header>
                             <p className="plan-price">
                               {cash(Number(plan.price_monthly), plan.currency)}
-                              <small> / mois</small>
+                              <small> / mois après 14j d’essai</small>
                             </p>
                             <p className="plan-setup">
-                              Installation {cash(Number(plan.setup_fee ?? 0), plan.currency)} ·{' '}
-                              <strong>à régler {cash(total, plan.currency)}</strong>
+                              <Wrench size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                              Installation physique sur site :{' '}
+                              <strong>{cash(Number(plan.setup_fee ?? 0), plan.currency)}</strong>
                             </p>
                             <ul className="plan-features">
-                              {(plan.modules ?? []).slice(0, 8).map((mod: string) => (
-                                <li key={mod}><CheckCircle2 size={12} /> {MODULE_LABELS[mod] ?? mod.replace(/_/g, ' ')}</li>
+                              <li>
+                                <CheckCircle2 size={12} />{' '}
+                                {unlimited(plan.max_properties) ? 'Biens illimités' : `Jusqu’à ${plan.max_properties} biens`}
+                              </li>
+                              <li>
+                                <CheckCircle2 size={12} />{' '}
+                                {unlimited(plan.max_members) ? 'Utilisateurs illimités' : `Jusqu’à ${plan.max_members} membres`}
+                              </li>
+                              <li>
+                                <CheckCircle2 size={12} />{' '}
+                                {plan.monthly_agent_messages.toLocaleString('fr-FR')} messages IA / mois
+                              </li>
+                              {(plan.modules ?? []).slice(0, 6).map((mod: string) => (
+                                <li key={mod}>
+                                  <CheckCircle2 size={12} /> {MODULE_LABELS[mod] ?? mod.replace(/_/g, ' ')}
+                                </li>
                               ))}
                             </ul>
                           </button>
@@ -343,18 +409,21 @@ export default function OnboardingPage() {
                       })}
                     </div>
                   )}
-                  <p className="form-hint" data-testid="hint-onboarding-contract">
-                    Le contrat de l’offre choisie vous sera présenté pour signature
-                    par le propriétaire de l’agence. Emplacement réservé au bloc
-                    « Contrat » : rien à faire pour l’instant.
+                  <p className="form-hint" data-testid="hint-onboarding-plan-rule">
+                    Pendant l’attente d’installation et les 14 jours d’essai, toute modification d’offre
+                    impliquant un changement des frais d’installation est effectuée par l’administrateur Sofia.
                   </p>
                 </section>
               )}
+
               {step === 4 && (
                 <div className="onboarding-step">
-                  <span className="form-kicker">Étape 4 sur 4</span>
-                  <h1>Prêt à créer votre espace ?</h1>
-                  <p>Vérifiez les informations : elles pourront être modifiées ensuite dans les paramètres.</p>
+                  <span className="form-kicker">Étape 5 sur 5</span>
+                  <h1>Vérifiez votre dossier avant enregistrement</h1>
+                  <p>
+                    Votre agence sera enregistrée en attente d’installation physique. Dès la mise en
+                    service validée par l’administrateur, vos 14 jours d’essai gratuit démarreront automatiquement.
+                  </p>
                   <div className="review-list" data-testid="display-onboarding-review">
                     <div><span>Agence</span><strong>{values.name || '—'}</strong></div>
                     <div><span>Raison sociale</span><strong>{values.legal_name || 'Non renseignée'}</strong></div>
@@ -362,10 +431,38 @@ export default function OnboardingPage() {
                     <div><span>E-mail</span><strong>{values.email || 'Non renseigné'}</strong></div>
                     <div><span>Adresse</span><strong>{[values.address, values.city].filter(Boolean).join(', ') || '—'}</strong></div>
                     <div><span>Logo</span><strong>{logo ? logo.name : 'Ajouté plus tard'}</strong></div>
+                    <div>
+                      <span>Offre retenue</span>
+                      <strong data-testid="review-selected-plan">
+                        {selectedPlan ? selectedPlan.display_name : 'Aucune offre choisie'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Frais d’installation physique</span>
+                      <strong>
+                        {selectedPlan ? `${cash(selectedPlan.setup_fee, selectedPlan.currency)} (sur site)` : '—'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Essai gratuit à l’activation</span>
+                      <strong>14 jours complets (100 % des quotas de l’offre)</strong>
+                    </div>
+                    <div>
+                      <span>Abonnement après les 14 jours</span>
+                      <strong>
+                        {selectedPlan
+                          ? `${cash(selectedPlan.price_monthly, selectedPlan.currency)} / mois (via SasPay)`
+                          : '—'}
+                      </strong>
+                    </div>
                   </div>
                   <div className="notice-box">
                     <ShieldCheck size={14} />
-                    <span>Votre agence sera créée avec un abonnement Starter, son espace isolé et un accès propriétaire pour votre compte.</span>
+                    <span>
+                      Aucun paiement en ligne n’est demandé aujourd’hui. À l’issue des 14 jours d’essai,
+                      les règlements mensuels s’effectuent via SasPay (les frais éventuels de transaction
+                      dépendent du moyen de paiement choisi).
+                    </span>
                   </div>
                 </div>
               )}
@@ -381,12 +478,17 @@ export default function OnboardingPage() {
                   <span />
                 )}
                 {step < STEPS.length - 1 ? (
-                  <Button type="button" onClick={() => void goNext()} data-testid="button-onboarding-next">
+                  <Button
+                    type="button"
+                    onClick={() => void goNext()}
+                    disabled={step === 3 && !chosenPlanId}
+                    data-testid="button-onboarding-next"
+                  >
                     Continuer <ArrowRight size={15} />
                   </Button>
                 ) : (
-                  <Button type="submit" disabled={createAgency.isPending} data-testid="button-onboarding-submit">
-                    {createAgency.isPending ? 'Création de l’agence…' : 'Créer mon agence'} <CheckCircle2 size={15} />
+                  <Button type="submit" disabled={createAgency.isPending || !chosenPlanId} data-testid="button-onboarding-submit">
+                    {createAgency.isPending ? 'Enregistrement du dossier…' : 'Enregistrer mon agence'} <CheckCircle2 size={15} />
                   </Button>
                 )}
               </div>
@@ -395,7 +497,7 @@ export default function OnboardingPage() {
         </section>
 
         <p className="onboarding-foot">
-          <MapPin size={13} /> Vos données sont hébergées sur Supabase et isolées par agence grâce aux politiques RLS.
+          <MapPin size={13} /> Vos données sont isolées par agence grâce aux politiques de sécurité RLS.
         </p>
       </main>
     </div>

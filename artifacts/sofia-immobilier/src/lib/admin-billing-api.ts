@@ -136,6 +136,8 @@ export interface RevenueMonthRow {
   mensualite_par_offre: Record<string, number>;
   encaisse: number;
   payments_count: number;
+  installations_physiques?: number;
+  installations_physiques_count?: number;
 }
 
 export type JournalEventType =
@@ -144,7 +146,31 @@ export type JournalEventType =
   | 'suspension'
   | 'reactivation'
   | 'payment_validated'
-  | 'payment_reclassified';
+  | 'payment_reclassified'
+  | 'installation_completed'
+  | 'trial_started'
+  | 'trial_ended'
+  | 'invoice_generated';
+
+export interface PhysicalInstallationLedgerRow {
+  id: string;
+  agency_id: string;
+  agency_name: string;
+  plan_id: string | null;
+  plan_name: string | null;
+  install_stage: 'initial' | 'upgrade_supplement' | 'adjustment' | string;
+  expected_amount: number;
+  collected_amount: number;
+  currency: string;
+  payment_method: string;
+  receipt_reference: string | null;
+  installation_completed: boolean;
+  installed_at: string | null;
+  collected_on: string;
+  note: string | null;
+  recorded_by_name: string | null;
+  created_at: string;
+}
 
 export interface JournalRow {
   id: string;
@@ -187,6 +213,7 @@ export interface PlatformRevenueReport {
   months: RevenueMonthRow[];
   journal: JournalRow[];
   factures: InvoiceRow[];
+  installations_physiques?: PhysicalInstallationLedgerRow[];
   totals: {
     mensualite_total: number;
     mensualite_par_offre: Record<string, number>;
@@ -195,10 +222,15 @@ export interface PlatformRevenueReport {
     encaisse_brut: number;
     ecritures_contraires: number;
     paiements_valides: number;
+    installations_physiques_total?: number;
+    installations_physiques_mois?: number;
+    installations_physiques_periode?: number;
+    installations_physiques_nombre?: number;
     factures_en_attente_montant: number;
     factures_en_attente_nombre: number;
     factures_payees_nombre: number;
     agences_actives: number;
+    agences_essai?: number;
     active_without_payment: Array<{ id: string; name: string; plan_name: string; price_monthly: number }>;
   };
   by_plan: Array<{
@@ -206,9 +238,11 @@ export interface PlatformRevenueReport {
     name: string;
     display_name: string | null;
     price_monthly: number;
+    setup_fee?: number;
     currency: string;
     sort_order: number;
     active_agencies: number;
+    trial_agencies?: number;
   }>;
 }
 
@@ -277,6 +311,9 @@ export function useAdminChangePlanJournaled() {
       if (error) throw error;
       return data as {
         changed: boolean;
+        mode?: string;
+        plan_name?: string;
+        setup_fee?: number;
         mensualite_variation?: number;
         invoice_id?: string | null;
         invoice_amount?: number;

@@ -167,6 +167,7 @@ export type WhatsAppConnectionUpdateInput = Partial<WhatsAppConnectionCreateInpu
 
 export type OnboardingInput = {
   name: string;
+  plan_id: string;
   legal_name?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -201,7 +202,7 @@ export type PlatformSummary = {
 };
 
 const AGENCY_COLUMNS =
-  'id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, logo_url, description, commission_rate, rental_commission_rate, created_at, updated_at';
+  'id, name, slug, legal_name, phone, email, address, city, country, timezone, currency, status, logo_url, description, commission_rate, rental_commission_rate, pending_plan_id, pending_note, pending_updated_at, created_at, updated_at';
 
 export type ProfileUpdateInput = Partial<Pick<UserProfileRow, 'full_name' | 'phone'>>;
 export type PropertyMediaPreview = PropertyMediaRow & {
@@ -1451,6 +1452,9 @@ export function useCreateAgency() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: OnboardingInput): Promise<AgencyRow> => {
+      if (!input.plan_id || !input.plan_id.trim()) {
+        throw new Error('Le choix d’une offre (Essentiel, Pro ou Premium) est obligatoire.');
+      }
       const { data, error } = await db().rpc('create_agency_for_self', {
         p_name: input.name,
         p_legal_name: input.legal_name ?? null,
@@ -1463,6 +1467,7 @@ export function useCreateAgency() {
         p_currency: input.currency ?? 'XOF',
         p_description: input.description ?? null,
         p_logo_url: null,
+        p_plan_id: input.plan_id,
       });
       if (error) throw error;
       const agency = data as unknown as AgencyRow;
@@ -1909,6 +1914,8 @@ export type AccountMembership = {
   agency_name: string;
   agency_status: string;
   role: string;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
 };
 
 export type AccountState = {
@@ -1928,9 +1935,19 @@ export async function getAccountState(): Promise<AccountState> {
   };
 }
 
+/**
+ * LOT 2 & LOT 3 : Une agence en `suspended` N'EST PLUS déconnectée de force
+ * à l'ouverture de session — elle est routée par `WorkspaceGate` vers l'écran
+ * verrouillé `<SuspendedAgencyPage />` (hors `AppShell`), afin que le
+ * propriétaire / administrateur puisse régulariser son impayé via SasPay
+ * (`purpose = 'reactivation'`) et obtenir la réactivation automatique immédiate.
+ * Seul un compte dont TOUTES les adhésions sont définitivement clôturées
+ * (`cancelled`) est bloqué à la connexion.
+ */
 export function isBlockedAccount(state?: AccountState | null): boolean {
   if (!state || state.is_admin) return false;
-  return state.memberships.some((membership) => membership.agency_status === 'suspended');
+  if (state.memberships.length === 0) return false;
+  return state.memberships.every((membership) => membership.agency_status === 'cancelled');
 }
 
 export function useAccountState(enabled = true) {

@@ -1,11 +1,15 @@
 // =============================================================================
-// BLOC 2 (session 3) — ESSAI GRATUIT DE 14 JOURS
+// LOT 1 — ESSAI GRATUIT DE 14 JOURS (DÉCLENCHÉ À L'ACTIVATION ADMINISTRATIVE)
 // =============================================================================
-// Une seule source côté base : `public.agency_start_trial(agency_id, plan_id)`
-// crée l'abonnement en statut 'trial' (sauf si l'administrateur exige une
-// validation), `trial_ends_at` = maintenant + N jours, et `ends_at` = fin de
-// l'essai : le compte à rebours payant démarre donc à la FIN de l'essai, et les
-// jours d'essai ne sont jamais déduits de la première période payée.
+// Règles métier validées :
+//   • Toute nouvelle agence est créée en `pending` et ne démarre JAMAIS son
+//     essai toute seule : c'est l'activation par l'administrateur après
+//     l'installation physique (`admin_activate_pending_agency`) qui ouvre
+//     automatiquement les 14 jours d'essai gratuit (J0 → J14).
+//   • Pendant les 14 jours d'essai, l'agence bénéficie de 100 % des quotas et
+//     fonctionnalités de l'offre choisie (`quota_source = 'plan'`).
+//   • Pendant `pending` et les 14 jours d'essai, seul l'administrateur peut
+//     modifier l'offre lorsque les frais d'installation changent.
 // =============================================================================
 import { getSupabaseClient } from './supabase';
 
@@ -17,7 +21,7 @@ const rpc = () => getSupabaseClient() as unknown as RpcClient;
 export interface SignupSettings {
   require_admin_validation: boolean;
   trial_days: number;
-  trial_agent_messages: number;
+  quota_source?: 'plan';
 }
 
 export interface StartTrialResult {
@@ -39,7 +43,7 @@ export async function fetchSignupSettings(): Promise<SignupSettings> {
   return data as SignupSettings;
 }
 
-/** Démarre l'essai (ou place l'agence en attente de validation admin). */
+/** Conservé pour compatibilité : renvoie `mode = 'pending_validation'` tant que l'admin n'a pas activé l'agence. */
 export async function startAgencyTrial(agencyId: string, planId: string): Promise<StartTrialResult> {
   const { data, error } = await rpc().rpc('agency_start_trial', {
     p_agency_id: agencyId,
@@ -49,7 +53,7 @@ export async function startAgencyTrial(agencyId: string, planId: string): Promis
   return data as StartTrialResult;
 }
 
-/** Pendant l'essai : changement d'offre immédiat, sans validation admin. */
+/** Pendant l'essai : bloqué côté base pour un non-admin si les frais d'installation changent. */
 export async function changePlanDuringTrial(agencyId: string, planId: string) {
   const { data, error } = await rpc().rpc('agency_change_plan_during_trial', {
     p_agency_id: agencyId,
@@ -80,7 +84,7 @@ export async function adminEndTrial(agencyId: string, note?: string) {
 export async function adminSetSignupSettings(requireValidation: boolean, trialDays?: number) {
   const { data, error } = await rpc().rpc('admin_set_signup_settings', {
     p_require_validation: requireValidation,
-    p_trial_days: trialDays ?? null,
+    p_trial_days: trialDays ?? 14,
   });
   if (error) throw error;
   return data as SignupSettings;

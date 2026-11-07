@@ -111,24 +111,38 @@ export const isValidDateValue = (value?: string | null) => parseDate(value) !== 
 
 const MISSING_DATE_LABEL = 'Non renseignée';
 
-/** Formate une date ; renvoie un libellé de repli au lieu de lever. */
+/** Fuseau horaire officiel de référence Sofia Immobilier (Mali — UTC+0). */
+export const SOFIA_TIMEZONE = 'Africa/Bamako';
+
+/** Formate une date dans le fuseau `Africa/Bamako` ; renvoie un libellé de repli au lieu de lever. */
 export function formatDate(value: string | Date | null | undefined, fallback = MISSING_DATE_LABEL): string {
   const date = value instanceof Date ? value : parseDate(value);
   if (!date) return fallback;
   try {
-    return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+    const isBareDate = typeof value === 'string' && /^\d{4}-\d{2}(-\d{2})?$/.test(value.trim());
+    return new Intl.DateTimeFormat('fr-FR', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      ...(isBareDate ? {} : { timeZone: SOFIA_TIMEZONE }),
+    }).format(date);
   } catch {
     return fallback;
   }
 }
 
-/** Formate une date + heure ; renvoie un libellé de repli au lieu de lever. */
+/** Formate une date + heure dans le fuseau `Africa/Bamako` ; renvoie un libellé de repli au lieu de lever. */
 export function formatDateTime(value: string | Date | null | undefined, fallback = MISSING_DATE_LABEL): string {
   const date = value instanceof Date ? value : parseDate(value);
   if (!date) return fallback;
   try {
     return new Intl.DateTimeFormat('fr-FR', {
-      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: SOFIA_TIMEZONE,
     }).format(date);
   } catch {
     return fallback;
@@ -143,17 +157,14 @@ export function monthShortLabel(value: string | Date | null | undefined, fallbac
   const date = value instanceof Date ? value : parseDate(value);
   if (!date) return fallback;
   try {
-    return new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(date).replace('.', '');
+    return new Intl.DateTimeFormat('fr-FR', { month: 'short', timeZone: SOFIA_TIMEZONE }).format(date).replace('.', '');
   } catch {
     return fallback;
   }
 }
 
 /**
- * Formateur générique qui ne lève JAMAIS.
- * Remplace les `new Date(chaine).toLocaleString(...)` dispersés dans l'app,
- * qui lèvent `RangeError: Invalid time value` sur une chaîne non vide mais
- * invalide. Renvoie `fallback` dans ce cas.
+ * Formateur générique en fuseau `Africa/Bamako` qui ne lève JAMAIS.
  */
 export function safeFormat(
   value: string | number | Date | null | undefined,
@@ -165,7 +176,12 @@ export function safeFormat(
   const date = value instanceof Date ? value : (typeof value === 'number' ? new Date(value) : parseDate(value));
   if (!date) return fallback;
   try {
-    return new Intl.DateTimeFormat(locale, options).format(date);
+    const isBareDate = typeof value === 'string' && /^\d{4}-\d{2}(-\d{2})?$/.test(value.trim());
+    const mergedOptions: Intl.DateTimeFormatOptions = {
+      ...(isBareDate ? {} : { timeZone: SOFIA_TIMEZONE }),
+      ...options,
+    };
+    return new Intl.DateTimeFormat(locale, mergedOptions).format(date);
   } catch {
     return fallback;
   }
@@ -266,14 +282,16 @@ export function ButtonPrimary({
   onClick,
   testId,
   disabled = false,
+  type = 'button',
 }: {
   children: ReactNode;
-  onClick: () => void;
+  onClick?: () => void;
   testId: string;
   disabled?: boolean;
+  type?: 'button' | 'submit' | 'reset';
 }) {
   return (
-    <Button className="primary-action" onClick={onClick} disabled={disabled} data-testid={testId}>
+    <Button type={type} className="primary-action" onClick={onClick} disabled={disabled} data-testid={testId}>
       {children}
     </Button>
   );

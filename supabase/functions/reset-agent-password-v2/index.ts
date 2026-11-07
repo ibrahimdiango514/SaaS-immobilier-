@@ -1,36 +1,12 @@
 // =============================================================================
-// BLOC 5 — reset-agent-password  (verify_jwt = true)
+// reset-agent-password-v2  (verify_jwt = false cote passerelle pour CORS OPTIONS)
 // =============================================================================
-// Réinitialise le mot de passe d'un membre de l'agence à la demande du
-// propriétaire ou d'un administrateur de CETTE agence.
-//
-// Garde-fous (tous vérifiés côté serveur, jamais depuis le corps de requête) :
-//   1. appelant authentifié via son JWT ;
-//   2. appelant owner/admin de l'agence de la cible (has_agency_role, avec repli
-//      sur une lecture directe de agency_members si la résolution RPC échoue) ;
-//   3. la cible appartient à la MÊME agence (le membership est résolu par le
-//      serveur à partir du membership_id, l'agence n'est jamais fournie seule) ;
-//   4. la cible n'est PAS le propriétaire de l'agence ;
-//   5. la cible n'est pas l'appelant lui-même ;
-//   6. l'agence n'est pas suspendue.
-//
-// Le mot de passe est GÉNÉRÉ CÔTÉ SERVEUR (crypto.getRandomValues), renvoyé UNE
-// SEULE FOIS dans la réponse, et `must_change_password` est posé à la fois dans
-// auth.user_metadata et dans saas_immobilier.user_profiles (le verrou de
-// WorkspaceGate lit ce dernier). L'action est tracée dans activity_log.
+// Reinitialise le mot de passe d'un membre de l'agence a la demande du
+// proprietaire ou d'un administrateur de CETTE agence.
+// Source autonome en ASCII pur, sans import relatif.
 // =============================================================================
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2'
-// BLOC 11 (bugs bloquants 2 et 3) — CORRECTIFS `corsHeaders` / `json` INTÉGRÉS.
-// Cause racine : ces fonctions importaient `../_shared/http.ts`. Un déploiement
-// fait par l'API Supabase (create/update_edge_function) n'envoie QUE le fichier
-// d'entrée `index.ts` : le module partagé `_shared/http.ts` n'était donc pas
-// présent dans l'artefact déployé, et la fonction échouait au chargement du
-// module — d'où une création de membre et un lien d'invitation qui ne
-// produisaient rien côté navigateur.
-// Les 12 lignes du module partagé sont recopiées ici : chaque fonction déployée
-// est désormais AUTONOME, sans aucune importation relative.
-// `supabase/functions/_shared/http.ts` est conservé pour un déploiement via le
-// CLI (`supabase functions deploy`), qui, lui, téléverse toute l'arborescence.
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -48,7 +24,6 @@ const SCHEMA = 'saas_immobilier'
 const PASSWORD_LENGTH = 14
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Alphabet sans caractères ambigus (0/O, 1/l/I) — saisie facile sur mobile. */
 const LOWER = 'abcdefghijkmnopqrstuvwxyz'
 const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
 const DIGITS = '23456789'
@@ -61,7 +36,6 @@ function generatePassword(length = PASSWORD_LENGTH): string {
   crypto.getRandomValues(shuffle)
 
   const pick = (alphabet: string, byte: number) => alphabet.charAt(byte % alphabet.length)
-  // Composition garantie : au moins une majuscule, une minuscule et un chiffre.
   const chars = [pick(UPPER, bytes[0]), pick(LOWER, bytes[1]), pick(DIGITS, bytes[2])]
   for (let i = 3; i < length; i += 1) chars.push(pick(ALL, bytes[i]))
   for (let i = length - 1; i > 0; i -= 1) {
@@ -81,7 +55,6 @@ type Membership = {
   status: string
 }
 
-/** Résout le membership visé (par id de membership, ou par agence + utilisateur). */
 async function resolveMembership(
   admin: SupabaseClient,
   membershipId: string,
@@ -96,12 +69,6 @@ async function resolveMembership(
   return (data as Membership | null) ?? null
 }
 
-/**
- * Owner/admin de l'agence ? `has_agency_role` est la référence (owner satisfait
- * 'admin', administrateurs plateforme inclus). Le repli n'intervient QUE si
- * l'appel RPC échoue techniquement (résolution de schéma) — jamais s'il renvoie
- * `false`, et il est alors plus strict (membership actif de l'agence uniquement).
- */
 async function isAgencyManager(
   callerClient: SupabaseClient,
   admin: SupabaseClient,
@@ -127,8 +94,9 @@ async function isAgencyManager(
   const { data: platformAdmin } = await admin
     .schema(SCHEMA)
     .from('platform_admins')
-    .select('role')
+    .select('role, status')
     .eq('user_id', callerId)
+    .eq('status', 'active')
     .maybeSingle()
   return Boolean(platformAdmin)
 }
@@ -173,12 +141,12 @@ Deno.serve(async (request) => {
   })
   const admin = createClient(url, service, { auth: { persistSession: false } })
 
-  // 1. Appelant authentifié — le JWT fait foi.
+  // 1. Appelant authentifie
   const { data: callerData, error: callerError } = await callerClient.auth.getUser()
   const caller = callerData.user
   if (callerError || !caller) return json({ error: 'authentication_required' }, 401)
 
-  // 2. Cible résolue PAR LE SERVEUR (même agence par construction).
+  // 2. Cible resolue cote serveur
   let membership: Membership | null = null
   try {
     membership = await resolveMembership(admin, membershipId, agencyId, targetUserId)
@@ -188,33 +156,33 @@ Deno.serve(async (request) => {
   }
   if (!membership) return json({ error: 'membership_not_found' }, 404)
 
-  // 3. Appelant owner/admin de l'agence de la cible.
+  // 3. Appelant owner/admin de l'agence de la cible
   const allowed = await isAgencyManager(callerClient, admin, membership.agency_id, caller.id)
   if (!allowed) return json({ error: 'agency_admin_or_owner_required' }, 403)
 
-  // 4. Le propriétaire de l'agence est intouchable.
+  // 4. Le proprietaire de l'agence est intouchable
   if (membership.role === 'owner') return json({ error: 'owner_password_cannot_be_reset' }, 403)
 
-  // 5. Personne ne se réinitialise lui-même par ce chemin (→ page Profil).
+  // 5. Personne ne se reinitialise lui-meme par ce chemin
   if (membership.user_id === caller.id) return json({ error: 'cannot_reset_own_password' }, 400)
 
-  // 6. Agence non suspendue.
+  // 6. Agence active ou en essai ('active' / 'trial')
   const { data: agencyRow } = await admin
     .schema(SCHEMA)
     .from('agencies')
     .select('id, name, status')
     .eq('id', membership.agency_id)
     .maybeSingle()
-  if (!agencyRow || agencyRow.status !== 'active') {
+  if (!agencyRow || !['active', 'trial'].includes(String(agencyRow.status))) {
     return json({ error: 'agency_suspended' }, 403)
   }
 
-  // 7. Compte cible.
+  // 7. Compte cible
   const { data: targetData, error: targetError } = await admin.auth.admin.getUserById(membership.user_id)
   const targetUser = targetData?.user
   if (targetError || !targetUser) return json({ error: 'target_account_not_found' }, 404)
 
-  // 8. Nouveau mot de passe généré côté serveur + changement forcé à la connexion.
+  // 8. Nouveau mot de passe genere cote serveur + changement force a la connexion
   const tempPassword = generatePassword()
   const previousMetadata = (targetUser.user_metadata ?? {}) as Record<string, unknown>
   const { error: updateError } = await admin.auth.admin.updateUserById(membership.user_id, {
@@ -231,25 +199,32 @@ Deno.serve(async (request) => {
     return json({ error: 'password_reset_failed', details: updateError.message }, 502)
   }
 
-  // 9. Drapeau côté profil : c'est lui que le verrou WorkspaceGate consulte.
+  // 9. Drapeau cote profil (lu par WorkspaceGate)
   const { error: profileError } = await admin
     .schema(SCHEMA)
     .from('user_profiles')
-    .update({ must_change_password: true })
-    .eq('id', membership.user_id)
+    .upsert(
+      {
+        id: membership.user_id,
+        email: targetUser.email ?? null,
+        full_name: (previousMetadata.full_name as string | undefined) ?? null,
+        role: 'agency',
+        must_change_password: true,
+      },
+      { onConflict: 'id' },
+    )
   if (profileError) {
-    // Le mot de passe est déjà changé : on signale sans revenir en arrière.
     console.error('reset_password_profile_flag_failed', profileError.message)
   }
 
-  // 10. Traçabilité (échec toléré : le trigger activity_log couvre déjà la table).
+  // 10. Tracabilite
   const { error: logError } = await admin.schema(SCHEMA).from('activity_log').insert({
     agency_id: membership.agency_id,
     user_id: caller.id,
     action: 'updated',
     entity_type: 'agency_members',
     entity_id: membership.id,
-    summary: `Mot de passe réinitialisé pour ${targetUser.email ?? membership.user_id} (rôle ${membership.role})`,
+    summary: `Mot de passe reinitialise pour ${targetUser.email ?? membership.user_id} (role ${membership.role})`,
     metadata: {
       table: 'agency_members',
       op: 'UPDATE',
@@ -263,7 +238,6 @@ Deno.serve(async (request) => {
   })
   if (logError) console.error('reset_password_activity_log_failed', logError.message)
 
-  // Le mot de passe n'est renvoyé qu'ici, une seule fois.
   return json({
     membership_id: membership.id,
     agency_id: membership.agency_id,

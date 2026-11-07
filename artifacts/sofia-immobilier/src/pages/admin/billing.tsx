@@ -1,14 +1,10 @@
 // =============================================================================
-// BLOC 2 (2 + 3) — ADMIN : file « Paiements à valider » et demandes de
-// changement d'offre.
-// =============================================================================
-// Aucune décision d'autorisation ici : review_payment_declaration et
-// admin_handle_plan_change vérifient is_platform_admin() côté base.
+// LOT 2 & LOT 3 — ADMIN : PAIEMENTS SASPAY, RÉCONCILIATION, DÉCLARATIONS & OFFRES
 // =============================================================================
 import { useMemo, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, CreditCard, Eye, FileText, Search, Sparkles,
-  XCircle,
+  AlertTriangle, CheckCircle2, CreditCard, Eye, FileText, RefreshCw, Search,
+  ShieldCheck, Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +22,10 @@ import {
   usePlanChangeRequests, useReviewPaymentDeclaration,
   type AdminDeclarationRow, type PlanChangeRequestRow,
 } from '@/lib/admin-billing-api';
+import {
+  ONLINE_PAYMENT_STATUS_LABELS, SASPAY_PURPOSE_LABELS,
+  useAdminReconcileSasPay, useAdminSasPayOverview,
+} from '@/lib/saspay-api';
 
 type Decision = 'approved' | 'rejected';
 
@@ -54,7 +54,6 @@ function ProofPreview({ proofPath }: { proofPath: string | null }) {
   );
 }
 
-/** Boîte de décision partagée : validation / rejet avec motif. */
 function DecisionDialog({
   open,
   onOpenChange,
@@ -101,7 +100,7 @@ function DecisionDialog({
               data-testid={`${testId}-approve`}
             >
               <strong>Valider</strong>
-              <small>Le paiement est enregistré et l’abonnement prolongé d’un mois.</small>
+              <small>Le paiement est enregistré et l’abonnement mis à jour automatiquement.</small>
             </button>
             <button
               type="button"
@@ -125,8 +124,8 @@ function DecisionDialog({
               onChange={(e) => setNote(e.target.value)}
               placeholder={
                 decision === 'rejected'
-                  ? 'Ex. Référence introuvable dans le relevé Orange Money du 21/10.'
-                  : 'Ex. Paiement reçu, abonnement prolongé d’un mois.'
+                  ? 'Ex. Référence introuvable dans le relevé Orange Money.'
+                  : 'Ex. Paiement reçu, abonnement mis à jour.'
               }
               data-testid={`${testId}-input-note`}
             />
@@ -248,14 +247,17 @@ export default function AdminBillingPage() {
   const agenciesQ = useAllAgencies();
   const declarationsQ = usePaymentDeclarations();
   const planChangesQ = usePlanChangeRequests();
+  const saspayQ = useAdminSasPayOverview(60);
+  const reconcileSasPay = useAdminReconcileSasPay();
   const review = useReviewPaymentDeclaration();
   const handlePlan = useHandlePlanChange();
 
   const [target, setTarget] = useState<AdminDeclarationRow | null>(null);
   const [planTarget, setPlanTarget] = useState<PlanChangeRequestRow | null>(null);
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'payments' | 'plans'>('payments');
+  const [tab, setTab] = useState<'saspay' | 'payments' | 'plans'>('saspay');
   const [error, setError] = useState('');
+  const [reconcileNotice, setReconcileNotice] = useState('');
 
   const agencyName = useMemo(() => {
     const map = new Map<string, string>();
@@ -289,17 +291,46 @@ export default function AdminBillingPage() {
     return rows.filter((row) => agencyName(row.agency_id).toLocaleLowerCase('fr').includes(needle));
   }, [planChangesQ.data, search, agencyName]);
 
+  const saspayPayments = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase('fr');
+    const rows = saspayQ.data?.payments ?? [];
+    if (!needle) return rows;
+    return rows.filter(
+      (row) =>
+        (row.agency_name ?? '').toLocaleLowerCase('fr').includes(needle) ||
+        (row.transaction_reference ?? '').toLocaleLowerCase('fr').includes(needle) ||
+        row.purpose.toLocaleLowerCase('fr').includes(needle),
+    );
+  }, [saspayQ.data?.payments, search]);
+
   const pendingDeclarations = (declarationsQ.data ?? []).filter((row) => row.status === 'pending').length;
   const pendingPlans = (planChangesQ.data ?? []).filter((row) => row.status === 'pending').length;
+  const pendingSasPay = saspayQ.data?.kpis?.pending_count ?? 0;
 
   if (declarationsQ.isLoading || planChangesQ.isLoading || agenciesQ.isLoading) {
     return (
       <>
-        <AdminHeading eyebrow="Facturation" title="Paiements et offres" description="Chargement des files…" />
+        <AdminHeading eyebrow="Facturation" title="Paiements SasPay et offres" description="Chargement des flux financiers…" />
         <LoadingRows />
       </>
     );
   }
+
+  const runReconciliation = async () => {
+    setError('');
+    setReconcileNotice('');
+    try {
+      const res = await reconcileSasPay.mutateAsync(true);
+      await saspayQ.refetch();
+      setReconcileNotice(
+        res.saspay_configured === false
+          ? 'Cycle d’échéances exécuté avec succès. Clé API SasPay non configurée sur cet environnement (0 session distante interrogée).'
+          : `Réconciliation SasPay terminée : ${res.checked} session(s) contrôlée(s), ${res.confirmed} paiement(s) confirmé(s), ${res.errors} erreur(s).`,
+      );
+    } catch (err) {
+      setError(getSupabaseErrorMessage(err, 'réconcilier les sessions SasPay'));
+    }
+  };
 
   const decide = (decision: Decision, note: string) => {
     if (!target) return;
@@ -328,12 +359,35 @@ export default function AdminBillingPage() {
   return (
     <>
       <AdminHeading
-        eyebrow="Facturation"
+        eyebrow="Facturation & SasPay (LOT 3)"
         title="Paiements et offres"
-        description="Validez les paiements déclarés par les agences et traitez leurs demandes de changement d’offre."
+        description="Supervisez les encaissements en ligne SasPay (1er mois, renouvellement, prorata d’offre, réactivation), la réconciliation automatique et les déclarations manuelles."
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={reconcileSasPay.isPending}
+            onClick={() => void runReconciliation()}
+            data-testid="button-admin-reconcile-saspay"
+          >
+            <RefreshCw size={14} />{' '}
+            {reconcileSasPay.isPending ? 'Réconciliation…' : 'Réconcilier SasPay & Échéances'}
+          </Button>
+        }
       />
 
       <section className="review-queue-summary" aria-label="Files d'attente">
+        <button
+          type="button"
+          className={`queue-pill${tab === 'saspay' ? ' is-active' : ''}`}
+          onClick={() => setTab('saspay')}
+          aria-pressed={tab === 'saspay'}
+          data-testid="tab-saspay"
+        >
+          <ShieldCheck size={14} /> Transactions SasPay
+          <strong data-testid="count-pending-saspay">{pendingSasPay}</strong>
+        </button>
         <button
           type="button"
           className={`queue-pill${tab === 'payments' ? ' is-active' : ''}`}
@@ -341,7 +395,7 @@ export default function AdminBillingPage() {
           aria-pressed={tab === 'payments'}
           data-testid="tab-payments"
         >
-          <CreditCard size={14} /> Paiements à valider
+          <CreditCard size={14} /> Déclarations manuelles
           <strong data-testid="count-pending-payments">{pendingDeclarations}</strong>
         </button>
         <button
@@ -357,6 +411,7 @@ export default function AdminBillingPage() {
       </section>
 
       {error && <p className="form-error module-error" role="alert">{error}</p>}
+      {reconcileNotice && <p className="form-feedback" role="status" data-testid="status-reconcile-notice">{reconcileNotice}</p>}
 
       <section className="list-toolbar">
         <label className="list-search">
@@ -364,17 +419,139 @@ export default function AdminBillingPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Agence ou référence de transaction…"
+            placeholder="Agence, motif ou référence de transaction…"
             aria-label="Rechercher"
             data-testid="input-search-billing"
           />
         </label>
         <span className="result-count">
-          {tab === 'payments' ? `${declarations.length} déclaration(s)` : `${planChanges.length} demande(s)`}
+          {tab === 'saspay'
+            ? `${saspayPayments.length} transaction(s) SasPay`
+            : tab === 'payments'
+              ? `${declarations.length} déclaration(s)`
+              : `${planChanges.length} demande(s)`}
         </span>
       </section>
 
-      {tab === 'payments' ? (
+      {tab === 'saspay' ? (
+        saspayQ.isLoading ? (
+          <LoadingRows label="Chargement du journal SasPay" />
+        ) : saspayQ.error ? (
+          <div className="state-card compact-empty" role="status" data-testid="status-saspay-admin-unavailable">
+            <div className="state-icon"><ShieldCheck size={19} /></div>
+            <h2>Vue SasPay en attente de migration</h2>
+            <p>{getSupabaseErrorMessage(saspayQ.error, 'charger le suivi SasPay')}</p>
+          </div>
+        ) : (
+          <>
+            <section className="kpi-grid" style={{ marginBottom: 18 }} data-testid="grid-saspay-kpis">
+              <article className="panel kpi-card">
+                <span className="form-kicker">Volume SasPay confirmé</span>
+                <strong className="kpi-value" data-testid="kpi-saspay-volume">
+                  {cash(Number(saspayQ.data?.kpis?.paid_volume_xof ?? 0), 'XOF')}
+                </strong>
+                <small>{saspayQ.data?.kpis?.paid_count ?? 0} paiement(s) vérifié(s)</small>
+              </article>
+              <article className="panel kpi-card">
+                <span className="form-kicker">Sessions en attente</span>
+                <strong className="kpi-value" data-testid="kpi-saspay-pending">
+                  {saspayQ.data?.kpis?.pending_count ?? 0}
+                </strong>
+                <small>Rapprochées par webhook ou réconciliation</small>
+              </article>
+              <article className="panel kpi-card">
+                <span className="form-kicker">Exceptions ouvertes</span>
+                <strong className="kpi-value" data-testid="kpi-saspay-exceptions">
+                  {saspayQ.data?.kpis?.exceptions_count ?? 0}
+                </strong>
+                <small>Divergences bloquées côté serveur</small>
+              </article>
+              <article className="panel kpi-card">
+                <span className="form-kicker">Webhooks reçus (24h)</span>
+                <strong className="kpi-value" data-testid="kpi-saspay-webhooks">
+                  {saspayQ.data?.kpis?.webhooks_24h ?? 0}
+                </strong>
+                <small>Signatures HMAC-SHA256 validées</small>
+              </article>
+            </section>
+
+            {(saspayQ.data?.exceptions ?? []).length > 0 && (
+              <section className="panel" style={{ marginBottom: 18 }} data-testid="panel-saspay-exceptions">
+                <div className="panel-head">
+                  <div>
+                    <h2>Exceptions de rapprochement à contrôler</h2>
+                    <p>Transactions bloquées automatiquement par les gardes de sécurité serveur</p>
+                  </div>
+                  <AlertTriangle size={18} />
+                </div>
+                <div className="plan-request-list">
+                  {saspayQ.data!.exceptions.map((ex) => (
+                    <article className="plan-request-row is-rejected" key={ex.payment_id}>
+                      <div className="plan-request-head">
+                        <strong>{ex.agency_name ?? 'Agence'}</strong>
+                        <span className="mono">{ex.reason}</span>
+                      </div>
+                      <p className="plan-request-meta">
+                        Session : {ex.session_id ?? '—'} · Transaction : {ex.transaction_id ?? '—'} · Vu le {dateTimeLabel(ex.last_seen_at)}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {saspayPayments.length === 0 ? (
+              <div className="state-card compact-empty" data-testid="empty-saspay-admin">
+                <div className="state-icon"><ShieldCheck size={19} /></div>
+                <h2>Aucune transaction SasPay enregistrée</h2>
+                <p>Les paiements en ligne d’abonnement apparaîtront automatiquement ici.</p>
+              </div>
+            ) : (
+              <div className="panel list-panel" data-testid="table-saspay-admin">
+                <div className="table-wrap">
+                  <table className="data-table full-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Agence</th>
+                        <th>Motif</th>
+                        <th>Offre</th>
+                        <th>Montant Sofia</th>
+                        <th>Statut</th>
+                        <th>Référence SasPay</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {saspayPayments.map((row) => (
+                        <tr key={row.id} data-testid={`row-admin-saspay-${row.id}`}>
+                          <td>{dateTimeLabel(row.created_at)}</td>
+                          <td><strong>{row.agency_name ?? '—'}</strong></td>
+                          <td>{SASPAY_PURPOSE_LABELS[row.purpose] ?? row.purpose}</td>
+                          <td>{row.plan_name ?? '—'}</td>
+                          <td>
+                            <strong>{cash(Number(row.amount), row.currency)}</strong>
+                            {row.provider_charged_amount != null && Number(row.provider_charged_amount) !== Number(row.amount) && (
+                              <small style={{ display: 'block' }}>
+                                Débité client : {cash(Number(row.provider_charged_amount), row.currency)}
+                              </small>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`status-pill status-${row.status === 'paid' ? 'available' : row.status === 'pending' ? 'reserved' : 'unavailable'}`}>
+                              {ONLINE_PAYMENT_STATUS_LABELS[row.status] ?? row.status}
+                            </span>
+                          </td>
+                          <td className="mono">{row.transaction_reference ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )
+      ) : tab === 'payments' ? (
         declarationsQ.error ? (
           <div className="state-card error-state" role="alert">
             <h2>File inaccessible</h2>
@@ -396,8 +573,8 @@ export default function AdminBillingPage() {
         ) : (
           <div className="state-card compact-empty" data-testid="empty-declarations-admin">
             <div className="state-icon"><CheckCircle2 size={19} /></div>
-            <h2>Aucune déclaration à traiter</h2>
-            <p>Les paiements déclarés par les agences apparaîtront ici.</p>
+            <h2>Aucune déclaration manuelle à traiter</h2>
+            <p>Les paiements déclarés manuellement par les agences apparaîtront ici.</p>
           </div>
         )
       ) : planChangesQ.error ? (
@@ -434,7 +611,7 @@ export default function AdminBillingPage() {
         title={`Déclaration de ${target ? agencyName(target.agency_id) : ''}`}
         description={
           target
-            ? `${cash(Number(target.amount), target.currency)} par ${METHOD_LABELS[target.method] ?? target.method}, référence ${target.transaction_reference}. La validation enregistre le paiement, prolonge l’abonnement d’un mois et réactive l’agence si elle était suspendue.`
+            ? `${cash(Number(target.amount), target.currency)} par ${METHOD_LABELS[target.method] ?? target.method}, référence ${target.transaction_reference}. La validation solde l’échéance ouverte, met à jour la période et réactive l’agence si elle était suspendue.`
             : ''
         }
         requireNoteOnReject

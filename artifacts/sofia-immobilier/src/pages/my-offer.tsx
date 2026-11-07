@@ -1,26 +1,46 @@
-// LOT B (point B) — PAGE « MON OFFRE ».
-// Toute la donnée vient de public.agency_usage_snapshot(agency_id), déjà en base.
-// Aucune nouvelle table, aucune nouvelle fonction SQL.
+// =============================================================================
+// LOT 2 & LOT 3 — PAGE « MON OFFRE, FACTURES & PAIEMENT SASPAY »
+// =============================================================================
+// • Compteurs complets du cycle LOT 2 :
+//     - Essai gratuit 14j (J0 → J14, quotas complets)
+//     - Période mensuelle active [J14 → E1] ou [En-1 → En] (accès complet même impayé)
+//     - Période de grâce de 5 jours [E1 → E1 + 5j] (accès complet + compte à rebours)
+// • Paiement en ligne sécurisé SasPay (LOT 3) :
+//     - 1er mois post-essai ('first_subscription', ZÉRO frais d'installation)
+//     - Renouvellement mensuel ('renewal')
+//     - Montée d'offre immédiate au prorata calculé côté serveur ('plan_change')
+// =============================================================================
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'wouter';
 import {
-  AlertTriangle, Building2, Check, ImageIcon, Lock, Sparkles, UsersRound,
+  AlertTriangle, ArrowRight, Bell, Building2, CalendarClock, Check, CheckCircle2,
+  CreditCard, FileText, History, ImageIcon, Lock, RefreshCw, ShieldCheck, Sparkles,
+  UsersRound,
 } from 'lucide-react';
-import { ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel, formatDateTimeShort, safeFormat } from '@/lib/workspace-ui';
-import { PaymentSection } from '@/components/payment-panel';
-// BLOC 7 : jauge « Utilisation IA ce mois » (lecture seule, quotas de l'offre).
-import { useAgencyAiUsage, compactNumber } from '@/lib/usage-api';
-// BLOC 11 (bug 4) : suivi des demandes de changement d'offre cote agence.
+import { Button } from '@/components/ui/button';
 import {
-  usePlanChangeRequests, planChangeStatusLabel, useAllPlans,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  ErrorState, Heading, LoadingRows, useSafeRetry, cash, dateLabel,
+  dateTimeLabel, formatDateTimeShort, safeFormat,
+} from '@/lib/workspace-ui';
+import { PaymentSection } from '@/components/payment-panel';
+import { useAgencyAiUsage, compactNumber, whatsappStatusLabel } from '@/lib/usage-api';
+import {
+  useAgencyPlanState, usePlanChangeRequests, planChangeStatusLabel, useAllPlans,
   type PlanRow as SharedPlanRow,
 } from '@/lib/plan-limits';
+import {
+  INVOICE_KIND_LABELS, INVOICE_STATUS_LABELS, ONLINE_PAYMENT_STATUS_LABELS,
+  SASPAY_PURPOSE_LABELS, useAgencyInvoices, useAgencyOnlinePayments,
+  useCreateSasPayCheckout, usePlanUpgradePreview, type SasPayPurpose,
+} from '@/lib/saspay-api';
+import { BILLING_EVENT_LABELS, useAgencyBillingEvents } from '@/lib/notifications-api';
 import { UsageGauge, WhatsAppBadge } from '@/components/usage-gauge';
-import { whatsappStatusLabel } from '@/lib/usage-api';
 import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
-
-const db = () => getSupabaseClient().schema('saas_immobilier');
 
 interface UsagePlan {
   id: string;
@@ -56,9 +76,6 @@ interface UsageSnapshot {
   photos_per_property_limit: number;
 }
 
-// BLOC 2 : `PlanRow` et `useAllPlans` viennent de lib/plan-limits.ts (source
-// unique). Le doublon local ne sélectionnait pas `setup_fee`, indispensable au
-// calcul du montant dû (installation + premier mois) sur l'écran d'attente.
 type PlanRow = SharedPlanRow;
 
 const MODULE_LABELS: Record<string, string> = {
@@ -81,8 +98,6 @@ function useUsageSnapshot(agencyId?: string) {
     queryKey: ['offre', 'usage', agencyId],
     enabled: Boolean(agencyId),
     queryFn: async (): Promise<UsageSnapshot> => {
-      // RPC dans public, tables dans saas_immobilier : le client nu est correct ici.
-      // Cast : database.types.ts est incomplet et n'expose pas les signatures RPC.
       const { data, error } = await (getSupabaseClient() as unknown as {
         rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
       }).rpc('agency_usage_snapshot', { p_agency_id: agencyId as string });
@@ -91,8 +106,6 @@ function useUsageSnapshot(agencyId?: string) {
     },
   });
 }
-
-
 
 function useRequestPlanChange(agencyId?: string) {
   const queryClient = useQueryClient();
@@ -134,24 +147,176 @@ function Meter({ label, used, limit, icon: Icon }: { label: string; used: number
   );
 }
 
+function ProrataUpgradeDialog({
+  open,
+  onOpenChange,
+  agencyId,
+  targetPlan,
+  isTrial,
+  onRequestAdminChange,
+  requestBusy,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  agencyId?: string;
+  targetPlan: PlanRow | null;
+  isTrial: boolean;
+  onRequestAdminChange: (target: PlanRow) => Promise<void>;
+  requestBusy: boolean;
+}) {
+  const previewQ = usePlanUpgradePreview(
+    !isTrial ? agencyId : undefined,
+    !isTrial && open ? (targetPlan?.id ?? null) : null,
+  );
+  const createCheckout = useCreateSasPayCheckout();
+  const [error, setError] = useState('');
+
+  const handlePayProrata = async () => {
+    if (!agencyId || !targetPlan) return;
+    setError('');
+    try {
+      const session = await createCheckout.mutateAsync({
+        agencyId,
+        purpose: 'plan_change',
+        planId: targetPlan.id,
+      });
+      window.location.assign(session.checkout_url);
+    } catch (err) {
+      setError((err as Error).message || 'Impossible de lancer le paiement SasPay.');
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { setError(''); onOpenChange(next); }}>
+      <DialogContent className="form-dialog" data-testid="dialog-prorata-upgrade">
+        <DialogHeader>
+          <span className="form-kicker">Changement d’offre</span>
+          <DialogTitle>
+            Passer à l’offre {targetPlan?.display_name ?? targetPlan?.name ?? ''}
+          </DialogTitle>
+          <DialogDescription>
+            {isTrial
+              ? 'Pendant les 14 jours d’essai gratuit, le changement d’offre est traité par l’administrateur (ajustement éventuel des frais d’installation physique).'
+              : 'Le supplément est calculé automatiquement côté serveur au prorata exact des jours restants sur votre période mensuelle en cours.'}
+          </DialogDescription>
+        </DialogHeader>
+
+        {isTrial && targetPlan ? (
+          <div className="settings-form">
+            <div className="notice-box" role="note">
+              <ShieldCheck size={15} />
+              <span>
+                Nouvelle mensualité après essai :{' '}
+                <strong>{cash(Number(targetPlan.price_monthly), targetPlan.currency)}</strong>/mois
+                (frais d’installation catalogue : {cash(Number(targetPlan.setup_fee ?? 0), targetPlan.currency)}).
+                Envoyez votre demande : l’administrateur ajustera votre offre immédiatement.
+              </span>
+            </div>
+            <div className="form-actions">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Annuler
+              </Button>
+              <Button
+                type="button"
+                disabled={requestBusy}
+                onClick={() => void onRequestAdminChange(targetPlan).then(() => onOpenChange(false))}
+                data-testid="button-confirm-trial-plan-request"
+              >
+                {requestBusy ? 'Envoi…' : 'Transmettre à l’administrateur'}
+              </Button>
+            </div>
+          </div>
+        ) : previewQ.isLoading ? (
+          <LoadingRows label="Calcul sécurisé du prorata en cours" />
+        ) : previewQ.error ? (
+          <p className="form-error" role="alert">{getSupabaseErrorMessage(previewQ.error, 'calculer le prorata')}</p>
+        ) : previewQ.data && !previewQ.data.eligible ? (
+          <div className="settings-form">
+            <div className="notice-box is-warning" role="status" data-testid="status-upgrade-ineligible">
+              <AlertTriangle size={15} />
+              <span>{previewQ.data.reason}</span>
+            </div>
+            <div className="form-actions">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Fermer
+              </Button>
+            </div>
+          </div>
+        ) : previewQ.data ? (
+          <div className="settings-form">
+            <div className="offer-facts">
+              <div>
+                <span>Offre actuelle</span>
+                <strong>{previewQ.data.current_plan_name} ({cash(Number(previewQ.data.current_price_monthly ?? 0), previewQ.data.currency ?? 'XOF')}/mois)</strong>
+              </div>
+              <div>
+                <span>Nouvelle offre</span>
+                <strong>{previewQ.data.target_plan_name} ({cash(Number(previewQ.data.target_price_monthly ?? 0), previewQ.data.currency ?? 'XOF')}/mois)</strong>
+              </div>
+              <div>
+                <span>Jours restants sur la période</span>
+                <strong>{previewQ.data.days_remaining} / {previewQ.data.total_days} jour(s) (jusqu’au {previewQ.data.period_end ? dateLabel(previewQ.data.period_end) : '—'})</strong>
+              </div>
+              <div>
+                <span>Prorata net à régler maintenant</span>
+                <strong data-testid="text-upgrade-prorata-amount">
+                  {cash(Number(previewQ.data.prorata_amount ?? 0), previewQ.data.currency ?? 'XOF')}
+                </strong>
+              </div>
+            </div>
+
+            <div className="notice-box" role="note">
+              <ShieldCheck size={15} />
+              <span>
+                Activation immédiate dès confirmation SasPay. Les frais éventuels de transaction dépendent du moyen
+                de paiement choisi côté SasPay (Orange Money, Wave, carte).
+              </span>
+            </div>
+
+            {error && <p className="form-error" role="alert" data-testid="status-upgrade-saspay-error">{error}</p>}
+
+            <div className="form-actions">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Annuler
+              </Button>
+              <Button
+                type="button"
+                disabled={createCheckout.isPending}
+                onClick={() => void handlePayProrata()}
+                data-testid="button-pay-prorata-saspay"
+              >
+                <CreditCard size={15} />{' '}
+                {createCheckout.isPending
+                  ? 'Ouverture de SasPay…'
+                  : `Payer ${cash(Number(previewQ.data.prorata_amount ?? 0), previewQ.data.currency ?? 'XOF')} avec SasPay`}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function MyOfferPage() {
   const { activeAgencyId, canManageAgency } = useAgency();
   const usage = useUsageSnapshot(activeAgencyId);
-  // BLOC 7 : appelé avant tout return anticipé (règle des hooks).
+  const planStateQ = useAgencyPlanState(activeAgencyId);
+  const invoicesQ = useAgencyInvoices(activeAgencyId);
+  const onlinePaymentsQ = useAgencyOnlinePayments(activeAgencyId);
+  const billingEventsQ = useAgencyBillingEvents(activeAgencyId, 20);
+  const createCheckout = useCreateSasPayCheckout();
   const aiUsage = useAgencyAiUsage(activeAgencyId);
   const plans = useAllPlans();
   const requestChange = useRequestPlanChange(activeAgencyId);
-  // BLOC 11 (bug 4) : les demandes de l'agence et leur statut reel en base.
   const planRequests = usePlanChangeRequests(activeAgencyId);
+
   const [notice, setNotice] = useState('');
-  // Message rendu AU NIVEAU DU BOUTON : avant, le seul retour etait affiche tout
-  // en bas de la page, hors ecran au moment du clic -> « rien ne se passe ».
   const [upgradeMessage, setUpgradeMessage] = useState('');
   const [upgradeFailed, setUpgradeFailed] = useState(false);
+  const [saspayError, setSaspayError] = useState('');
+  const [upgradeTarget, setUpgradeTarget] = useState<PlanRow | null>(null);
 
-  // BLOC 10 (roles) : « Mon offre » regroupe l'abonnement, les declarations de
-  // paiement et la consommation. Reserve au proprietaire et aux administrateurs.
-  // Garde placee apres tous les hooks (regle des hooks de React).
   if (!canManageAgency) {
     return (
       <>
@@ -159,9 +324,8 @@ export default function MyOfferPage() {
         <div className="permission-note" role="status" data-testid="status-offer-permission">
           <Lock size={15} />
           <span>
-            L’offre, les paiements et la consommation de l’agence sont réservés au
-            propriétaire et aux administrateurs. Votre rôle ne permet pas d’y
-            accéder. Les règles d’accès définies côté base restent prioritaires.
+            L’offre, les factures, les paiements SasPay et la consommation de l’agence sont réservés au
+            propriétaire et aux administrateurs. Votre rôle ne permet pas d’y accéder.
           </span>
         </div>
       </>
@@ -169,21 +333,39 @@ export default function MyOfferPage() {
   }
 
   if (usage.isLoading) {
-    return <><Heading eyebrow="Abonnement" title="Mon offre" description="Offre active, limites et paiement." /><LoadingRows label="Chargement de l’offre" /></>;
+    return (
+      <>
+        <Heading eyebrow="Abonnement" title="Mon offre" description="Offre active, cycle de facturation et paiement en ligne." />
+        <LoadingRows label="Chargement de l’offre" />
+      </>
+    );
   }
+
   if (usage.error) {
-    return <><Heading eyebrow="Abonnement" title="Mon offre" description="Offre active, limites et paiement." /><ErrorState error={usage.error as Error} retry={useSafeRetry(usage)} /></>;
+    return (
+      <>
+        <Heading eyebrow="Abonnement" title="Mon offre" description="Offre active, cycle de facturation et paiement en ligne." />
+        <ErrorState error={usage.error as Error} retry={useSafeRetry(usage)} />
+      </>
+    );
   }
 
   const snapshot = usage.data as UsageSnapshot;
   const { plan, seats, billing } = snapshot;
+  const planState = planStateQ.data;
+  const isTrial = planState?.state === 'trial';
+  const isGrace = planState?.billing_phase === 'grace_period' || planState?.state === 'overdue';
+  const hasOpenCycleInvoice =
+    Boolean(planState?.open_invoice_id) &&
+    ['first_subscription', 'renewal', 'reactivation'].includes(String(planState?.open_invoice_kind ?? ''));
+
   const included = new Set(plan.modules ?? []);
-  // Catalogue réel : union des modules de tous les plans présents en base.
   const catalog = Array.from(new Set((plans.data ?? []).flatMap((row) => row.modules ?? [])));
   const locked = catalog.filter((key) => !included.has(key));
   const upgrades = (plans.data ?? []).filter((row) => row.price_monthly > plan.price_monthly);
-  // BLOC 11 : index des offres par id, pour nommer les demandes de changement.
   const plansById = new Map((plans.data ?? []).map((row) => [row.id, row]));
+  const invoices = invoicesQ.data ?? [];
+  const onlinePayments = onlinePaymentsQ.data ?? [];
 
   const askUpgrade = async (target: PlanRow) => {
     setNotice('');
@@ -192,12 +374,10 @@ export default function MyOfferPage() {
     try {
       await requestChange.mutateAsync({
         planId: target.id,
-        note: `Demande depuis la page Mon offre : passage de ${plan.display_name} à ${target.display_name}.`,
+        note: `Demande depuis Mon offre : passage de ${plan.display_name} à ${target.display_name}.`,
       });
-      // BLOC 11 : message AU NIVEAU DU BOUTON, avec le code d'erreur exact en cas
-      // d'echec (plus jamais de bouton qui ne fait rien).
       setUpgradeMessage(
-        `Demande de passage à ${target.display_name} envoyée à l’administrateur. Elle apparaît ci-dessous avec son statut.`,
+        `Demande de passage à ${target.display_name} transmise à l’administrateur. Elle apparaît ci-dessous avec son statut.`,
       );
       setNotice(`Demande de passage à ${target.display_name} envoyée à l’administrateur.`);
     } catch (error) {
@@ -206,54 +386,227 @@ export default function MyOfferPage() {
       setUpgradeMessage(
         `${getSupabaseErrorMessage(error, 'envoyer la demande')}${code ? ` (code ${code})` : ''}`,
       );
-      setNotice('');
     }
   };
 
+  const launchSasPay = async (purpose: SasPayPurpose | 'invoice', invoiceId?: string | null) => {
+    if (!activeAgencyId) return;
+    setSaspayError('');
+    try {
+      const session = await createCheckout.mutateAsync({
+        agencyId: activeAgencyId,
+        purpose,
+        invoiceId: invoiceId ?? null,
+      });
+      window.location.assign(session.checkout_url);
+    } catch (err) {
+      setSaspayError((err as Error).message || 'Impossible de démarrer le paiement SasPay.');
+    }
+  };
+
+  const primaryPurpose: SasPayPurpose =
+    planState?.open_invoice_kind === 'first_subscription'
+      ? 'first_subscription'
+      : 'renewal';
+  const primaryAmount = Number(planState?.open_invoice_amount ?? plan.price_monthly ?? 0);
+
   return (
     <>
-      {/* 6. Bandeau d'alerte : 5 jours avant l'échéance, et le jour même. */}
-      {billing.has_due_date && (billing.is_due_soon || billing.is_overdue) && (
-        <div className={`offer-alert${billing.is_overdue ? ' is-overdue' : ''}`} role="status" data-testid="banner-due-alert">
+      {isGrace && (
+        <div className="offer-alert is-overdue" role="status" data-testid="banner-due-alert">
           <AlertTriangle size={17} />
           <div>
-            <strong>{billing.is_overdue ? 'Abonnement en retard de paiement' : 'Échéance proche'}</strong>
+            <strong>
+              Période de grâce ({planState?.grace_days ?? billing.grace_days ?? 5} jours) —{' '}
+              {planState?.grace_days_left ?? 1} jour(s) restant(s) avant suspension automatique
+            </strong>
             <p>
-              {billing.is_overdue
-                ? `Votre agence sera suspendue après le délai de grâce de ${billing.grace_days} jour(s).`
-                : `Votre abonnement arrive à échéance dans moins de 5 jours. Pensez à régler.`}
+              Vos accès complets au tableau de bord et à vos quotas restent maintenus jusqu’au{' '}
+              <strong>{planState?.grace_ends_at ? dateLabel(planState.grace_ends_at) : 'terme du délai de grâce'}</strong>.
+              Réglez votre facture mensuelle via SasPay ci-dessous pour conserver un service ininterrompu.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {!isGrace && billing.has_due_date && billing.is_due_soon && !planState?.is_current_period_paid && (
+        <div className="offer-alert" role="status" data-testid="banner-due-soon-alert">
+          <CalendarClock size={17} />
+          <div>
+            <strong>Échéance mensuelle proche</strong>
+            <p>
+              Votre période en cours arrive à échéance le{' '}
+              <strong>{planState?.ends_at ? dateLabel(planState.ends_at) : (billing.ends_at ? dateLabel(billing.ends_at) : '—')}</strong>.
+              Réglez dès maintenant en ligne avec SasPay.
             </p>
           </div>
         </div>
       )}
 
       <Heading
-        eyebrow="Abonnement"
+        eyebrow="Abonnement & Facturation (Heure de Bamako)"
         title="Mon offre"
-        description="Offre active, utilisation par rapport aux limites et paiement."
+        description="Cycle d’abonnement, paiement sécurisé SasPay, factures mensuelles et utilisation de vos quotas."
+        action={
+          <Link
+            href="/notifications"
+            className="button-link"
+            data-testid="link-offer-to-notifications"
+          >
+            <Bell size={15} /> Centre de notifications & rappels
+          </Link>
+        }
       />
 
       <div className="offer-layout">
+        {/* CARTE 1 : Offre active, compteurs du cycle LOT 2 & Paiement SasPay LOT 3 */}
         <section className="panel offer-current" data-testid="panel-current-offer">
           <div className="offer-plan-head">
             <div className="offer-plan-mark"><Sparkles size={20} /></div>
             <div>
-              <span className="form-kicker">Offre active</span>
+              <span className="form-kicker">
+                {isTrial
+                  ? `Essai gratuit · ${planState?.trial_days_left ?? 0} jour(s) restant(s)`
+                  : isGrace
+                    ? `En période de grâce · ${planState?.grace_days_left ?? 1} j restant(s)`
+                    : planState?.is_current_period_paid
+                      ? 'Abonnement actif · période réglée'
+                      : 'Abonnement actif · période en cours'}
+              </span>
               <h2 data-testid="text-plan-name">{plan.display_name}</h2>
               <p className="offer-price" data-testid="text-plan-price">
                 {cash(Number(plan.price_monthly), plan.currency)} <span>/ mois</span>
               </p>
             </div>
           </div>
+
           <div className="offer-facts">
-            <div><span>Frais d’installation</span><strong>{cash(Number(plan.setup_fee), plan.currency)}</strong></div>
-            <div><span>Échéance</span><strong>{billing.has_due_date ? (billing.ends_at ? dateLabel(billing.ends_at as string) : 'À venir') : 'Aucune échéance'}</strong></div>
-            <div><span>Délai de grâce</span><strong>{billing.grace_days} jour(s)</strong></div>
+            {isTrial ? (
+              <>
+                <div>
+                  <span>Début de l’essai</span>
+                  <strong>{planState?.starts_at ? dateLabel(planState.starts_at) : '—'}</strong>
+                </div>
+                <div>
+                  <span>Fin des 14 jours d’essai</span>
+                  <strong data-testid="text-trial-ends-at">
+                    {planState?.trial_ends_at ? dateLabel(planState.trial_ends_at) : '—'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Quotas pendant l’essai</span>
+                  <strong>100 % complets ({plan.display_name})</strong>
+                </div>
+                <div>
+                  <span>1re mensualité (à la fin de l’essai)</span>
+                  <strong>{cash(Number(plan.price_monthly), plan.currency)} (0 frais d’installation)</strong>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <span>Période mensuelle en cours</span>
+                  <strong>
+                    {planState?.current_period_start ? dateLabel(planState.current_period_start) : '—'}
+                    {' → '}
+                    {planState?.current_period_end ? dateLabel(planState.current_period_end) : (billing.ends_at ? dateLabel(billing.ends_at) : '—')}
+                  </strong>
+                </div>
+                <div>
+                  <span>Prochaine échéance</span>
+                  <strong data-testid="text-next-due-date">
+                    {planState?.ends_at
+                      ? `${dateLabel(planState.ends_at)}${planState.days_to_due != null && planState.days_to_due >= 0 ? ` (dans ${planState.days_to_due} j)` : ''}`
+                      : (billing.ends_at ? dateLabel(billing.ends_at) : '—')}
+                  </strong>
+                </div>
+                <div>
+                  <span>Statut de la période</span>
+                  <strong data-testid="text-period-payment-state">
+                    {planState?.is_current_period_paid
+                      ? `Payée jusqu’au ${planState.paid_through_at ? dateLabel(planState.paid_through_at) : ''}`
+                      : isGrace
+                        ? `En grâce jusqu’au ${planState?.grace_ends_at ? dateLabel(planState.grace_ends_at) : ''}`
+                        : 'Facture mensuelle ouverte (accès 100 % actif)'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Délai de grâce après échéance</span>
+                  <strong>{planState?.grace_days ?? billing.grace_days ?? 5} jours (accès complet maintenu)</strong>
+                </div>
+              </>
+            )}
           </div>
-          {/* BLOC 1 : le bouton « Payer mon abonnement » vit désormais dans la
-              section de paiement ci-dessous (déclaration + suivi d'état). */}
+
+          {/* BLOC PAIEMENT EN LIGNE SASPAY */}
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }} data-testid="box-saspay-primary">
+            {isTrial ? (
+              <div className="notice-box" role="note" data-testid="note-trial-no-payment-due">
+                <CheckCircle2 size={15} />
+                <span>
+                  Aucun paiement n’est demandé pendant vos 14 jours d’essai gratuit. Le{' '}
+                  <strong>{planState?.trial_ends_at ? dateLabel(planState.trial_ends_at) : 'jour J14'}</strong>, votre
+                  1er mois d’abonnement démarrera automatiquement et votre facture mensuelle de{' '}
+                  <strong>{cash(Number(plan.price_monthly), plan.currency)}</strong> (sans aucun frais d’installation)
+                  pourra être réglée ici via SasPay.
+                </span>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div className="notice-box" role="note" data-testid="note-saspay-fee-policy">
+                  <ShieldCheck size={15} />
+                  <span>
+                    Paiement en ligne sécurisé via <strong>SasPay</strong> (Orange Money, Wave, carte). Sofia facture
+                    uniquement le montant net de votre offre ; les frais éventuels de transaction dépendent du moyen
+                    de paiement choisi côté SasPay.
+                  </span>
+                </div>
+
+                {saspayError && (
+                  <p className="form-error" role="alert" data-testid="status-saspay-checkout-error">
+                    {saspayError}
+                  </p>
+                )}
+
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {hasOpenCycleInvoice ? (
+                    <Button
+                      type="button"
+                      className="w-full whitespace-normal h-auto py-2.5 text-center leading-snug"
+                      onClick={() => void launchSasPay(primaryPurpose, planState?.open_invoice_id)}
+                      disabled={createCheckout.isPending}
+                      data-testid="button-saspay-pay-open-invoice"
+                    >
+                      <CreditCard size={15} />{' '}
+                      {createCheckout.isPending
+                        ? 'Ouverture de SasPay…'
+                        : isGrace
+                          ? `Régulariser ${cash(primaryAmount, plan.currency)} avec SasPay`
+                          : `Payer ma facture (${cash(primaryAmount, plan.currency)}) avec SasPay`}{' '}
+                      <ArrowRight size={14} />
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full whitespace-normal h-auto py-2.5 text-center leading-snug"
+                      onClick={() => void launchSasPay('renewal', null)}
+                      disabled={createCheckout.isPending}
+                      data-testid="button-saspay-advance-renewal"
+                    >
+                      <CreditCard size={15} />{' '}
+                      {createCheckout.isPending
+                        ? 'Ouverture de SasPay…'
+                        : `Renouveler 1 mois d’avance (${cash(Number(plan.price_monthly), plan.currency)}) via SasPay`}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
+        {/* CARTE 2 : Utilisation des quotas */}
         <section className="panel" data-testid="panel-usage">
           <div className="panel-head">
             <div><h2>Utilisation</h2><p>Par rapport aux limites de votre offre</p></div>
@@ -268,9 +621,7 @@ export default function MyOfferPage() {
           </p>
         </section>
 
-        {/* ----------------------------------------------------------------- */}
-        {/* BLOC 7 : consommation IA du mois + état du canal WhatsApp          */}
-        {/* ----------------------------------------------------------------- */}
+        {/* CARTE 3 : Consommation IA & WhatsApp */}
         <section className="panel ai-usage-panel" data-testid="panel-ai-usage">
           <div className="panel-head">
             <div>
@@ -327,19 +678,6 @@ export default function MyOfferPage() {
                 {compactNumber(aiUsage.data.usage.ai_tokens_output)} en sortie.
               </p>
 
-              {aiUsage.data.alerts.ai_tokens !== 'ok' && aiUsage.data.alerts.ai_tokens !== 'unlimited' && (
-                <div className={`notice-box${aiUsage.data.alerts.ai_tokens === 'reached' ? ' is-danger' : ' is-warning'}`} role="status" data-testid="status-ai-quota-alert">
-                  <AlertTriangle size={15} />
-                  <span>
-                    {aiUsage.data.alerts.ai_tokens === 'reached'
-                      ? `Quota de tokens IA atteint pour ${aiUsage.data.plan.display_name ?? 'votre offre'}. L’assistant IA ne répondra plus jusqu’au mois prochain.`
-                      : `Vous avez consommé ${Math.round(aiUsage.data.ratios.ai_tokens)} % du quota de tokens IA de ${aiUsage.data.plan.display_name ?? 'votre offre'}.`}
-                    {canManageAgency && ' Envisagez une offre supérieure.'}
-                  </span>
-                </div>
-              )}
-
-              {/* Canal WhatsApp de l'agence : fournisseur, numéro, état. */}
               <div className="ai-whatsapp">
                 <h3>Canal WhatsApp</h3>
                 {aiUsage.data.whatsapp.length ? (
@@ -358,9 +696,6 @@ export default function MyOfferPage() {
                           {connection.last_activity_at
                             ? formatDateTimeShort(connection.last_activity_at)
                             : 'jamais'}
-                          {aiUsage.data?.plan.max_whatsapp_connections != null && (
-                            <> · {aiUsage.data.whatsapp.length}/{aiUsage.data.plan.max_whatsapp_connections} canal(aux) inclus</>
-                          )}
                         </small>
                       </div>
                     ))}
@@ -376,9 +711,10 @@ export default function MyOfferPage() {
           )}
         </section>
 
+        {/* CARTE 4 : Modules & Montée d'offre (Prorata SasPay en actif / Admin en essai) */}
         <section className="panel" data-testid="panel-modules">
           <div className="panel-head">
-            <div><h2>Modules</h2><p>Inclus dans {plan.display_name}, et disponibles au-dessus</p></div>
+            <div><h2>Modules & Évolution d’offre</h2><p>Inclus dans {plan.display_name}, et offres supérieures</p></div>
             <Check size={18} />
           </div>
           <div className="module-list">
@@ -394,10 +730,12 @@ export default function MyOfferPage() {
             })}
           </div>
 
-          {locked.length > 0 && canManageAgency && upgrades.length > 0 && (
+          {canManageAgency && upgrades.length > 0 && (
             <div className="upgrade-block">
               <p className="privacy-note-text">
-                {locked.length} module(s) verrouillé(s) dans {plan.display_name}.
+                {isTrial
+                  ? 'En période d’essai gratuit (14j), le changement d’offre passe par l’administrateur.'
+                  : `${locked.length > 0 ? `${locked.length} module(s) supplémentaire(s) déblocable(s) immédiatement. ` : ''}Passez à une offre supérieure au prorata exact via SasPay :`}
               </p>
               <div className="upgrade-options">
                 {upgrades.map((target) => (
@@ -405,15 +743,14 @@ export default function MyOfferPage() {
                     type="button"
                     key={target.id}
                     className="button-link"
-                    onClick={() => void askUpgrade(target)}
-                    disabled={requestChange.isPending}
-                    aria-busy={requestChange.isPending}
+                    onClick={() => setUpgradeTarget(target)}
+                    disabled={requestChange.isPending || createCheckout.isPending}
                     data-testid={`button-upgrade-${target.name}`}
                   >
                     <Sparkles size={14} />
-                    {requestChange.isPending && requestChange.variables?.planId === target.id
-                      ? ' Envoi de la demande…'
-                      : ` Passer au ${target.display_name}`}
+                    {isTrial
+                      ? ` Demander l’offre ${target.display_name}`
+                      : ` Passer au ${target.display_name} (prorata SasPay)`}
                   </button>
                 ))}
               </div>
@@ -431,34 +768,157 @@ export default function MyOfferPage() {
         </section>
       </div>
 
-      {/* BLOC 11 (bug 4) — SUIVI DES DEMANDES DE CHANGEMENT D'OFFRE.
-          L'agence voit enfin l'etat reel de sa demande : en attente, approuvee,
-          ou refusee AVEC le motif saisi par l'administrateur. */}
-      <section className="panel" data-testid="panel-plan-requests">
+      {/* SECTION FACTURES D'ABONNEMENT (LOT 2) */}
+      <section className="panel" data-testid="panel-agency-invoices">
         <div className="panel-head">
           <div>
-            <h2>Mes demandes de changement d’offre</h2>
-            <p>État réel enregistré par la plateforme</p>
+            <h2>Mes factures d’abonnement</h2>
+            <p>1re mensualité post-essai, renouvellements mensuels et devis de montée d’offre (hors frais d’installation physique)</p>
           </div>
-          <Sparkles size={18} />
+          <FileText size={18} />
         </div>
 
-        {planRequests.isLoading ? (
-          <LoadingRows label="Chargement des demandes" />
-        ) : planRequests.error ? (
-          <p className="form-feedback is-error" role="alert" data-testid="status-plan-requests-error">
-            {getSupabaseErrorMessage(planRequests.error, 'charger les demandes')}
-            {(planRequests.error as { code?: string })?.code
-              ? ` (code ${(planRequests.error as { code?: string }).code})`
-              : ''}
-          </p>
-        ) : (planRequests.data ?? []).length === 0 ? (
-          <p className="privacy-note-text" data-testid="status-plan-requests-empty">
-            Aucune demande pour l’instant. Utilisez « Passer au Pro/Premium »
-            ci-dessus : votre demande part à l’administrateur, qui peut
-            l’approuver ou la refuser avec un motif.
+        {invoicesQ.isLoading ? (
+          <LoadingRows label="Chargement de vos factures" />
+        ) : invoices.length === 0 ? (
+          <p className="privacy-note-text" data-testid="status-invoices-empty">
+            {isTrial
+              ? `Aucune facture émise pendant vos 14 jours d’essai gratuit. Votre première facture mensuelle (${cash(Number(plan.price_monthly), plan.currency)}) sera générée automatiquement le ${planState?.trial_ends_at ? dateLabel(planState.trial_ends_at) : 'J14'}.`
+              : 'Aucune facture d’abonnement enregistrée pour le moment.'}
           </p>
         ) : (
+          <div className="table-wrap">
+            <table className="data-table full-table">
+              <thead>
+                <tr>
+                  <th>Référence</th>
+                  <th>Type</th>
+                  <th>Période</th>
+                  <th>Montant</th>
+                  <th>Échéance</th>
+                  <th>Statut</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((inv) => (
+                  <tr key={inv.id} data-testid={`row-invoice-${inv.id}`}>
+                    <td className="mono">{inv.reference ?? '—'}</td>
+                    <td>
+                      <strong>{INVOICE_KIND_LABELS[inv.invoice_kind] ?? inv.invoice_kind}</strong>
+                      {inv.plan_to_name && <small style={{ display: 'block' }}>{inv.plan_to_name}</small>}
+                    </td>
+                    <td>
+                      {inv.period_start ? dateLabel(inv.period_start) : '—'}
+                      {inv.period_end ? ` → ${dateLabel(inv.period_end)}` : ''}
+                    </td>
+                    <td><strong>{cash(Number(inv.amount), inv.currency)}</strong></td>
+                    <td>
+                      {inv.due_at ? dateLabel(inv.due_at) : '—'}
+                      {inv.status === 'pending' && inv.grace_ends_at && inv.invoice_kind !== 'plan_change' && (
+                        <small style={{ display: 'block' }}>Grâce : {dateLabel(inv.grace_ends_at)}</small>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`status-pill status-${inv.status === 'paid' ? 'available' : inv.status === 'pending' ? 'reserved' : 'unavailable'}`}>
+                        {INVOICE_STATUS_LABELS[inv.status] ?? inv.status}
+                      </span>
+                    </td>
+                    <td>
+                      {inv.status === 'pending' ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={createCheckout.isPending}
+                          onClick={() => void launchSasPay('invoice', inv.id)}
+                          data-testid={`button-pay-invoice-${inv.id}`}
+                        >
+                          <CreditCard size={13} /> Payer via SasPay
+                        </Button>
+                      ) : inv.paid_at ? (
+                        <small>Réglée le {dateLabel(inv.paid_at)}</small>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* SECTION TRANSACTIONS EN LIGNE SASPAY (LOT 3) */}
+      <section className="panel" data-testid="panel-agency-online-payments">
+        <div className="panel-head">
+          <div>
+            <h2>Transactions en ligne SasPay</h2>
+            <p>Suivi en temps réel de vos sessions de paiement et vérification instantanée</p>
+          </div>
+          <CreditCard size={18} />
+        </div>
+
+        {onlinePaymentsQ.isLoading ? (
+          <LoadingRows label="Chargement des transactions SasPay" />
+        ) : onlinePayments.length === 0 ? (
+          <p className="privacy-note-text" data-testid="status-online-payments-empty">
+            Aucune session de paiement SasPay initiée pour le moment.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table full-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Motif</th>
+                  <th>Offre</th>
+                  <th>Montant</th>
+                  <th>Statut</th>
+                  <th>Référence SasPay</th>
+                  <th>Suivi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {onlinePayments.map((op) => (
+                  <tr key={op.id} data-testid={`row-online-payment-${op.id}`}>
+                    <td>{dateTimeLabel(op.created_at)}</td>
+                    <td>{SASPAY_PURPOSE_LABELS[op.purpose] ?? op.purpose}</td>
+                    <td>{op.plan_name ?? '—'}</td>
+                    <td><strong>{cash(Number(op.amount), op.currency)}</strong></td>
+                    <td>
+                      <span className={`status-pill status-${op.status === 'paid' ? 'available' : op.status === 'pending' ? 'reserved' : 'unavailable'}`}>
+                        {ONLINE_PAYMENT_STATUS_LABELS[op.status] ?? op.status}
+                      </span>
+                    </td>
+                    <td className="mono">{op.transaction_reference ?? '—'}</td>
+                    <td>
+                      <Link
+                        href={`/paiement/retour?payment=${encodeURIComponent(op.id)}`}
+                        className="button-link"
+                        data-testid={`link-verify-payment-${op.id}`}
+                      >
+                        <RefreshCw size={13} /> {op.status === 'pending' ? 'Vérifier' : 'Détail'}
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* SUIVI DES DEMANDES ADMINISTRATIVES DE CHANGEMENT D'OFFRE */}
+      {(planRequests.data ?? []).length > 0 && (
+        <section className="panel" data-testid="panel-plan-requests">
+          <div className="panel-head">
+            <div>
+              <h2>Mes demandes administratives de changement d’offre</h2>
+              <p>Historique des demandes traitées par l’équipe Sofia Immobilier</p>
+            </div>
+            <Sparkles size={18} />
+          </div>
           <div className="plan-request-list">
             {(planRequests.data ?? []).map((row) => {
               const requested = plansById.get(row.requested_plan_id);
@@ -472,7 +932,7 @@ export default function MyOfferPage() {
                       {current ? `${current.display_name ?? current.name} → ` : ''}
                       {requested?.display_name ?? requested?.name ?? 'Offre demandée'}
                     </strong>
-                    <span className={`declaration-status ${statusClass}`} data-testid={`badge-plan-request-${row.status}`}>
+                    <span className={`declaration-status ${statusClass}`}>
                       {planChangeStatusLabel(row.status)}
                     </span>
                   </div>
@@ -481,26 +941,75 @@ export default function MyOfferPage() {
                     {row.handled_at ? ` · traitée le ${dateLabel(row.handled_at)}` : ''}
                   </p>
                   {row.handle_note && (
-                    <p className="plan-request-note" data-testid="display-plan-request-note">
-                      <strong>Motif de l’administrateur :</strong> {row.handle_note}
-                    </p>
-                  )}
-                  {row.status === 'pending' && (
                     <p className="plan-request-note">
-                      Votre demande est en attente. L’administrateur peut demander un
-                      paiement avant validation : consultez la section ci-dessous.
+                      <strong>Note de l’administrateur :</strong> {row.handle_note}
                     </p>
                   )}
                 </article>
               );
             })}
           </div>
+        </section>
+      )}
+
+      {/* LOT 4 — HISTORIQUE CHRONOLOGIQUE DES ÉVÉNEMENTS DE FACTURATION */}
+      <section className="panel" data-testid="panel-billing-events-timeline">
+        <div className="panel-head">
+          <div>
+            <h2>Historique des événements d’abonnement</h2>
+            <p>Traçabilité horodatée (heure de Bamako) de votre essai, vos factures, vos paiements SasPay et vos changements d’offre</p>
+          </div>
+          <History size={18} />
+        </div>
+        {(billingEventsQ.data ?? []).length === 0 ? (
+          <p className="privacy-note-text">
+            Aucun événement de cycle enregistré pour le moment.
+          </p>
+        ) : (
+          <div className="plan-request-list">
+            {(billingEventsQ.data ?? []).slice(0, 10).map((ev) => (
+              <article
+                className="plan-request-row"
+                key={ev.id}
+                data-testid={`offer-billing-event-${ev.id}`}
+              >
+                <div className="plan-request-head">
+                  <strong>{BILLING_EVENT_LABELS[ev.event_type] ?? ev.event_type}</strong>
+                  {typeof ev.amount === 'number' && ev.amount > 0 && (
+                    <span className="declaration-status is-approved">
+                      {cash(ev.amount, 'XOF')}
+                    </span>
+                  )}
+                </div>
+                <p className="plan-request-meta">
+                  {dateTimeLabel(ev.created_at)}
+                  {ev.invoice_reference ? ` · Facture ${ev.invoice_reference}` : ''}
+                  {ev.plan_to_name ? ` · Offre ${ev.plan_to_name}` : ''}
+                </p>
+                {ev.reason && <p className="plan-request-note">{ev.reason}</p>}
+              </article>
+            ))}
+          </div>
         )}
+        <div style={{ marginTop: 12 }}>
+          <Link href="/notifications" className="text-action" data-testid="link-full-billing-history">
+            Consulter tout l’historique & les rappels dans le Centre de notifications <ArrowRight size={13} />
+          </Link>
+        </div>
       </section>
 
-      {/* BLOC 1 : déclaration de paiement manuel (Orange Money / Wave) et
-          suivi de l'état des déclarations de l'agence. */}
+      {/* REPLI MANUEL : Déclaration de paiement Orange Money / Wave avec justificatif */}
       <PaymentSection agencyId={activeAgencyId} />
+
+      <ProrataUpgradeDialog
+        open={Boolean(upgradeTarget)}
+        onOpenChange={(next) => { if (!next) setUpgradeTarget(null); }}
+        agencyId={activeAgencyId}
+        targetPlan={upgradeTarget}
+        isTrial={Boolean(isTrial)}
+        onRequestAdminChange={askUpgrade}
+        requestBusy={requestChange.isPending}
+      />
 
       {notice && <p className="form-feedback" role="status" data-testid="status-offer-message">{notice}</p>}
     </>

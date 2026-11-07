@@ -30,9 +30,10 @@ export default function ForcePasswordPage({ onDone }: { onDone: () => void }) {
       const userId = session.session?.user.id;
       if (userId) {
         // user_profiles vit dans saas_immobilier, pas dans public.
-        await (client.schema('saas_immobilier') as unknown as {
+        const { error: profileError } = await (client.schema('saas_immobilier') as unknown as {
           from: (t: string) => { update: (v: Record<string, unknown>) => { eq: (c: string, v: string) => Promise<{ error: unknown }> } };
         }).from('user_profiles').update({ must_change_password: false }).eq('id', userId);
+        if (profileError) throw profileError;
       }
     },
     onSuccess: () => onDone(),

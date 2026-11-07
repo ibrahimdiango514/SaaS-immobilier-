@@ -55,6 +55,23 @@ export interface AgencyRow {
   description: string | null;
   commission_rate: number;
   rental_commission_rate: number;
+  pending_plan_id?: string | null;
+  pending_note?: string | null;
+  pending_updated_at?: string | null;
+  installation_fee_expected?: number;
+  installation_status?: 'pending' | 'paid_pending_setup' | 'completed' | string;
+  installation_amount_collected?: number | null;
+  installation_collected_at?: string | null;
+  installation_collected_by?: string | null;
+  installation_completed_at?: string | null;
+  installation_completed_by?: string | null;
+  installation_payment_method?: string | null;
+  installation_receipt_reference?: string | null;
+  installation_note?: string | null;
+  activated_at?: string | null;
+  activated_by?: string | null;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -385,6 +402,7 @@ export interface Database {
           p_currency?: string;
           p_description?: string | null;
           p_logo_url?: string | null;
+          p_plan_id: string;
         };
         Returns: AgencyRow;
       };

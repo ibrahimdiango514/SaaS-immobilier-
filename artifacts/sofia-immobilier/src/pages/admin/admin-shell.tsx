@@ -244,9 +244,6 @@ export default function AdminShell({ children }: { children: ReactNode }) {
             <button type="button" className="icon-button topbar-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" title="Se déconnecter" data-testid="button-admin-topbar-sign-out">
               <LogOut size={15} />
             </button>
-            <Link href="/admin/activite" className="icon-button" aria-label="Voir l’activité" data-testid="link-admin-activity">
-              <Bell size={15} />
-            </Link>
             <Link href="/profil" className="profile-chip">
               <div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div>
               <span>{name}</span>
@@ -266,6 +263,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           <div className="mobile-brand">
             <strong>{adminNav.find((item) => (item.exact ? path === item.href : path.startsWith(item.href)))?.label ?? 'Administration'}</strong>
           </div>
+          <AdminAlertsBell testIdPrefix="mobile" />
           <button
             type="button"
             className="icon-button mobile-signout"
