@@ -495,6 +495,10 @@ const EVENT_LABELS: Record<string, string> = {
   reactivation: 'Réactivation',
   payment_validated: 'Paiement validé',
   payment_reclassified: 'Paiement reclassé',
+  installation_completed: 'Installation physique',
+  trial_started: 'Essai 14j ouvert',
+  trial_ended: 'Fin d’essai',
+  invoice_generated: 'Facture émise',
 };
 
 function operationLabel(row: { event_type: string; mensualite_variation: number | null; plan_from_name: string | null }): string {
@@ -509,7 +513,15 @@ function operationLabel(row: { event_type: string; mensualite_variation: number 
 
 function operationTone(label: string): string {
   if (label.startsWith('Baisse') || label === 'Suspension') return 'status-unavailable';
-  if (label.startsWith('Activation') || label.startsWith('Montée') || label === 'Réactivation') return 'status-available';
+  if (
+    label.startsWith('Activation') ||
+    label.startsWith('Montée') ||
+    label === 'Réactivation' ||
+    label === 'Installation physique' ||
+    label === 'Essai 14j ouvert'
+  ) {
+    return 'status-available';
+  }
   return 'status-reserved';
 }
 
@@ -627,6 +639,9 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
   const mensualite = Number(totals?.mensualite_total ?? 0);
   const facturesAttente = Number(totals?.factures_en_attente_montant ?? 0);
   const nbFactures = Number(totals?.factures_en_attente_nombre ?? 0);
+  const installationsPhysiquesTotal = Number(totals?.installations_physiques_total ?? 0);
+  const installationsPhysiquesNb = Number(totals?.installations_physiques_nombre ?? 0);
+  const installationsPhysiquesRows = report?.installations_physiques ?? [];
 
   const exportJournal = () => {
     downloadCsv(
@@ -682,6 +697,18 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
         onSuccess: (result) => {
           if (!result.changed) {
             setNotice(`Offre inchangée pour ${agency.name}.`);
+            return;
+          }
+          if (result.mode === 'trial_plan_updated') {
+            setNotice(
+              `${agency.name} : offre d’essai mise à jour (${result.plan_from ?? ''} → ${result.plan_to ?? ''}). L’essai gratuit de 14 jours se poursuit sans facture d’abonnement.`,
+            );
+            return;
+          }
+          if (result.mode === 'pending_plan_updated') {
+            setNotice(
+              `${agency.name} : offre en attente mise à jour vers ${result.plan_name ?? result.plan_to ?? ''} (installation physique : ${cash(Number(result.setup_fee ?? 0), 'XOF')}).`,
+            );
             return;
           }
           const variation = Number(result.mensualite_variation ?? 0);
@@ -745,7 +772,17 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
           <article className="kpi-card" data-testid="kpi-abo-agences-actives">
             <span className="kpi-label">Agences actives</span>
             <strong className="kpi-value">{totals?.agences_actives ?? 0}</strong>
-            <span className="kpi-foot">Abonnement en cours</span>
+            <span className="kpi-foot">
+              Abonnement en cours
+              {Number(totals?.agences_essai ?? 0) > 0 ? ` · ${totals?.agences_essai} en essai 14j` : ''}
+            </span>
+          </article>
+          <article className="kpi-card" data-testid="kpi-installations-physiques">
+            <span className="kpi-label">Installations physiques</span>
+            <strong className="kpi-value">{cash(installationsPhysiquesTotal, 'XOF')}</strong>
+            <span className="kpi-foot">
+              {installationsPhysiquesNb} installation(s) · hors abonnements & hors SasPay
+            </span>
           </article>
         </div>
 
@@ -830,6 +867,55 @@ function SubscriptionsOverviewSection({ agenciesQ }: { agenciesQ: ReturnType<typ
             </div>
           </>
         ) : null}
+
+        <div className="panel-subhead">
+          <div className="panel-subhead-row">
+            <div>
+              <h3>Installations physiques (hors abonnements récurrents)</h3>
+              <p>
+                Encaissements sur site des frais d’installation (150 000 / 250 000 / 400 000 FCFA),
+                comptabilisés séparément des abonnements mensuels et hors SasPay.
+              </p>
+            </div>
+            <span className="status-tag" data-testid="badge-installations-physiques-count">
+              {installationsPhysiquesNb} reçu(s) · {cash(installationsPhysiquesTotal, 'XOF')}
+            </span>
+          </div>
+        </div>
+        {installationsPhysiquesRows.length ? (
+          <div className="table-wrap">
+            <table className="data-table" data-testid="table-installations-physiques">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Agence</th>
+                  <th>Offre</th>
+                  <th>Montant encaissé</th>
+                  <th>Mode physique</th>
+                  <th>Référence reçu</th>
+                  <th>Enregistré par</th>
+                </tr>
+              </thead>
+              <tbody>
+                {installationsPhysiquesRows.map((inst) => (
+                  <tr key={inst.id} data-testid={`row-installation-${inst.id}`}>
+                    <td>{dateLabel(inst.collected_on)}</td>
+                    <td><strong>{inst.agency_name}</strong></td>
+                    <td>{inst.plan_name ?? '—'}</td>
+                    <td><strong>{cash(Number(inst.collected_amount), inst.currency || 'XOF')}</strong></td>
+                    <td>{inst.payment_method}</td>
+                    <td>{inst.receipt_reference ?? '—'}</td>
+                    <td>{inst.recorded_by_name ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-table" data-testid="empty-installations-physiques">
+            <strong>Aucune installation physique enregistrée sur la période</strong>
+          </div>
+        )}
 
         <div className="panel-subhead">
           <div className="panel-subhead-row">

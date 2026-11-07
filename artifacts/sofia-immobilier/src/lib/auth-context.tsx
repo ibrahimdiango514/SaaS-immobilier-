@@ -84,13 +84,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
+    const cleanEmail = email.trim().toLowerCase();
+    const client = getSupabaseClient();
+    let { data, error } = await client.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
+    });
+    // Tolérance mobile / copier-coller : si un espace parasite entoure le mot de passe,
+    // on retente une seule fois sans toucher aux mots de passe contenant volontairement un espace interne.
+    if (
+      error &&
+      error.message?.toLowerCase().includes('invalid login credentials') &&
+      password !== password.trim() &&
+      password.trim().length > 0
+    ) {
+      const retry = await client.auth.signInWithPassword({
+        email: cleanEmail,
+        password: password.trim(),
+      });
+      data = retry.data;
+      error = retry.error;
+    }
     if (error) throw error;
+    if (data.session) {
+      queryClient.clear();
+      previousUserId.current = data.session.user.id;
+      setSession(data.session);
+      setInitializationError(null);
+    }
     return data.user ?? null;
-  }, []);
+  }, [queryClient]);
 
   const signUp = useCallback(async (email: string, password: string) => {
-    const { data, error } = await getSupabaseClient().auth.signUp({ email, password });
+    const cleanEmail = email.trim().toLowerCase();
+    const { data, error } = await getSupabaseClient().auth.signUp({ email: cleanEmail, password });
     if (error) throw error;
     // Si la confirmation d'e-mail est désactivée (mailer_autoconfirm), la session
     // est immédiatement active. Sinon, aucun user n'est renvoyé : l'écran d'inscription

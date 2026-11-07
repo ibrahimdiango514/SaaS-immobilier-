@@ -40,7 +40,7 @@ export default function AdminSettingsPage() {
   const [beneficiary, setBeneficiary] = useState('');
   const [note, setNote] = useState('');
   const [graceDays, setGraceDays] = useState('5');
-  const [requireValidation, setRequireValidation] = useState(false);
+  const [requireValidation, setRequireValidation] = useState(true);
   const [trialDays, setTrialDays] = useState('14');
   const [trialMessage, setTrialMessage] = useState('');
   const [trialBusy, setTrialBusy] = useState(false);
@@ -311,16 +311,17 @@ export default function AdminSettingsPage() {
           </div>
         </section>
 
-        {/* BLOC 2 (session 3) — ESSAI GRATUIT ET VALIDATION À L'INSCRIPTION. */}
+        {/* LOT 1 — INSTALLATION PHYSIQUE, ACTIVATION ADMIN & ESSAI GRATUIT 14 JOURS */}
         <section className="panel settings-panel" data-testid="panel-trial-settings">
           <div className="settings-heading">
             <div className="settings-icon"><Sparkles size={17} /></div>
             <div>
-              <h2>Essai gratuit et ouverture des comptes</h2>
+              <h2>Installation physique & essai gratuit de 14 jours</h2>
               <p>
-                Durée de l’essai et contrôle d’accès des nouvelles agences.
-                Par défaut, une nouvelle agence ouvre son tableau de bord
-                immédiatement en essai, sans validation.
+                Toute nouvelle agence est créée en statut <strong>pending</strong> (attente
+                d’installation physique sur site). L’activation par l’administrateur ouvre
+                automatiquement <strong>14 jours d’essai gratuit</strong> avec 100 % des
+                quotas et modules de l’offre choisie.
               </p>
             </div>
             <span className={`permission-badge${isOwner ? ' allowed' : ''}`}>
@@ -330,21 +331,21 @@ export default function AdminSettingsPage() {
 
           <div className="settings-form">
             <div className="form-field">
-              <label className="form-label" htmlFor="setting-trial-days">Durée de l’essai (jours)</label>
+              <label className="form-label" htmlFor="setting-trial-days">Durée de l’essai gratuit (jours)</label>
               <Input
                 id="setting-trial-days"
                 type="number"
-                min="1"
-                max="90"
+                min="14"
+                max="14"
                 step="1"
                 value={trialDays}
                 onChange={(e) => setTrialDays(e.target.value)}
-                disabled={disabled}
+                disabled
                 data-testid="input-setting-trial-days"
               />
               <small className="form-hint">
-                <ShieldCheck size={12} /> Un seul essai par agence. Les jours d’essai
-                ne sont jamais déduits de la première période payée.
+                <ShieldCheck size={12} /> Règle métier officielle Sofia : 14 jours d’essai gratuit
+                complets (J0 → J14) démarrés à l’activation administrative, sans déduction sur le 1er mois payant.
               </small>
             </div>
             <div className="form-field">
@@ -352,16 +353,16 @@ export default function AdminSettingsPage() {
                 <input
                   id="setting-require-validation"
                   type="checkbox"
-                  checked={requireValidation}
-                  onChange={(e) => setRequireValidation(e.target.checked)}
-                  disabled={disabled}
+                  checked
+                  disabled
+                  readOnly
                   data-testid="checkbox-require-admin-validation"
                 />{' '}
-                Validation administrateur requise avant ouverture du dashboard
+                Installation physique & activation par l’administrateur obligatoires avant ouverture
               </label>
               <small className="form-hint">
-                <Info size={12} /> Décoché (par défaut) : la nouvelle agence entre
-                directement en essai. Coché : elle attend votre validation.
+                <Info size={12} /> Verrouillé côté base de données : aucune agence ne peut s’auto-activer
+                sans enregistrement préalable de l’installation physique.
               </small>
             </div>
             <div className="form-actions">
@@ -371,18 +372,18 @@ export default function AdminSettingsPage() {
                 onClick={() => {
                   setTrialMessage('');
                   setTrialBusy(true);
-                  adminSetSignupSettings(requireValidation, Number(trialDays) || 14)
+                  adminSetSignupSettings(true, 14)
                     .then((settings) => {
                       setTrialDays(String(settings.trial_days));
                       setRequireValidation(settings.require_admin_validation);
-                      setTrialMessage('Réglages de l’essai enregistrés.');
+                      setTrialMessage('Règle officielle (activation admin + 14 jours d’essai complets) synchronisée.');
                     })
-                    .catch((error: unknown) => setTrialMessage(getSupabaseErrorMessage(error, 'enregistrer les réglages de l’essai')))
+                    .catch((error: unknown) => setTrialMessage(getSupabaseErrorMessage(error, 'synchroniser les réglages de l’essai')))
                     .finally(() => setTrialBusy(false));
                 }}
                 data-testid="button-save-trial-settings"
               >
-                <Save size={14} /> {trialBusy ? 'Enregistrement…' : 'Enregistrer l’essai'}
+                <Save size={14} /> {trialBusy ? 'Synchronisation…' : 'Synchroniser la règle (14j)'}
               </Button>
               {trialMessage && <span className="form-hint" role="status">{trialMessage}</span>}
             </div>

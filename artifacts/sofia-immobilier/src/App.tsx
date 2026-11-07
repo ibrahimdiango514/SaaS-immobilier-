@@ -11,7 +11,7 @@ import {
   Camera, ImagePlus, Trash2, CalendarDays, BarChart3, UserCog, MessageCircle,
   Bell, CheckCheck, UserPlus, Wallet, Upload, Star, ChevronLeft, ChevronRight,
   // BLOC 3 (session 2) : cadenas des modules non inclus + etincelle « offre superieure ».
-  Lock, Sparkles,
+  Lock, Sparkles, Eye, EyeOff,
 } from 'lucide-react';
 import { Link, Route, Switch, useLocation, useParams, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -88,6 +88,10 @@ import TeamPage from '@/pages/team';
 import JoinAgencyPage from '@/pages/rejoindre';
 import ForcePasswordPage from '@/pages/force-password';
 import MyOfferPage from '@/pages/my-offer';
+import SuspendedAgencyPage from '@/pages/suspended';
+import PaymentReturnPage from '@/pages/payment-return';
+import NotificationsCenterPage from '@/pages/notifications';
+import { AgencyNotificationsBell } from '@/components/agency-notifications-bell';
 
 const queryClient = new QueryClient();
 
@@ -102,6 +106,7 @@ const nav = [
   { href: '/automatisations', label: 'Automatisations', icon: RefreshCw },
   { href: '/agence', label: 'Agence et membres', icon: UsersRound },
   { href: '/mon-offre', label: 'Mon offre', icon: Wallet },
+  { href: '/notifications', label: 'Notifications', icon: Bell },
   { href: '/equipe', label: 'Équipe', icon: UserCog },
   { href: '/profil', label: 'Mon profil', icon: UserRound },
   { href: '/parametres', label: 'Paramètres', icon: Settings2 },
@@ -193,36 +198,15 @@ function AppShell({ children }: { children: ReactNode }) {
     </aside>
     <div className="main-column">
       <header className="topbar"><div className="breadcrumb"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={24} testId="display-topbar-agency-logo" /><span>{activeAgency?.name ?? 'Espace agence'}</span><ArrowRight size={12} /><strong>{currentLabel}</strong></div><div className="topbar-tools">{path !== '/dashboard' && <BackButton space="agency" variant="desktop" testId="button-back-overview" />}<button type="button" className="icon-button topbar-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" title="Se déconnecter" data-testid="button-topbar-sign-out"><LogOut size={15} /></button><ThemeToggle testId="button-theme-toggle-app" /><Link href="/profil" className="profile-chip" data-testid="display-user-access-status"><div className="profile-circle">{name.slice(0, 1).toUpperCase()}</div><span>{name}</span></Link>
-        <div className="notif-wrap">
-          <button type="button" className="icon-button notif-button" onClick={() => setNotifOpen((v) => !v)} aria-label="Notifications" title="Notifications" aria-expanded={notifOpen} data-testid="button-notifications">
-            <Bell size={15} />
-            {unreadCount > 0 && <span className="notif-badge" data-testid="count-unread-notifications">{unreadCount > 9 ? '9+' : unreadCount}</span>}
-          </button>
-          {notifOpen && <div className="notif-panel" role="dialog" aria-label="Notifications" data-testid="panel-notifications">
-            <div className="notif-panel-head">
-              <strong>Notifications</strong>
-              {unreadCount > 0 && <button type="button" className="text-action" onClick={() => markAllRead.mutate()} disabled={markAllRead.isPending} data-testid="button-mark-all-read"><CheckCheck size={13} /> Tout lire</button>}
-            </div>
-            {notificationsQ.isLoading ? <div className="notif-empty">Chargement…</div> : notificationsQ.error ? <div className="notif-empty">Impossible de charger les notifications.</div> : (notificationsQ.data ?? []).length ? (
-              <div className="notif-list">
-                {notificationsQ.data!.map((item) => (
-                  <button type="button" key={item.id} className={`notif-item${item.read_at ? '' : ' is-unread'}`} onClick={() => { if (!item.read_at) markRead.mutate(item.id); }} data-testid={`row-notification-${item.id}`}>
-                    <strong>{item.title}</strong>
-                    <span>{item.message}</span>
-                    <small>{dateLabel(item.created_at)}</small>
-                  </button>
-                ))}
-              </div>
-            ) : <div className="notif-empty">Aucune notification pour l’instant.</div>}
-            <button type="button" className="notif-close" onClick={() => setNotifOpen(false)}>Fermer</button>
-          </div>}
-        </div>
+        <AgencyNotificationsBell agencyId={activeAgencyId} />
       </div></header>
       <header className="mobile-header">
         {/* BLOC 9 : retour visible sur mobile ET dans les previews. Repli
             determine sur la page parente quand il n'y a pas d'historique interne. */}
         <BackButton space="agency" variant="mobile" testId="button-mobile-back" />
-        <div className="mobile-brand"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={26} testId="display-mobile-agency-logo" /><strong>{activeAgency?.name ?? 'sofia immobilier'}</strong></div><button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
+        <div className="mobile-brand"><AgencyLogo logoUrl={activeAgency?.logo_url} name={activeAgency?.name} size={26} testId="display-mobile-agency-logo" /><strong>{activeAgency?.name ?? 'sofia immobilier'}</strong></div>
+        <AgencyNotificationsBell agencyId={activeAgencyId} testIdPrefix="mobile" />
+        <button type="button" className="icon-button mobile-signout" onClick={() => void handleSignOut()} aria-label="Se déconnecter" data-testid="button-mobile-sign-out"><LogOut size={17} /></button><button type="button" className="icon-button mobile-menu-button" aria-label={menuOpen ? 'Fermer le menu' : 'Ouvrir le menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)} data-testid="button-mobile-menu">{menuOpen ? <X size={18} /> : <Menu size={18} />}</button></header>
       <main className="content-wrap">
         {/* BLOC 1 (session 3) : l'état de l'offre est visible sur TOUTES les pages
             de l'espace agence — essai en cours, offre absente, retard de paiement. */}
@@ -335,6 +319,9 @@ function WorkspaceGate({ children }: { children: ReactNode }) {
   // instructions de paiement, le formulaire de declaration et le motif de refus
   // eventuel. Rendu HORS AppShell : aucune navigation vers les modules.
   if (agency.activeAgency?.status === 'pending') return <PendingValidationPage />;
+  // LOT 2 & LOT 3 : une agence suspendue voit uniquement l'écran verrouillé
+  // hors AppShell, avec possibilité de régularisation SasPay immédiate.
+  if (agency.activeAgency?.status === 'suspended') return <SuspendedAgencyPage />;
   return <AppShell>{children}</AppShell>;
 }
 
@@ -990,7 +977,7 @@ function SettingsPage() {
 }
 
 const loginSchema = z.object({
-  email: z.string().trim().email('Adresse e-mail invalide'),
+  email: z.string().trim().toLowerCase().email('Adresse e-mail invalide'),
   password: z.string().min(1, 'Le mot de passe est obligatoire'),
 });
 type LoginFormValues = z.infer<typeof loginSchema>;
@@ -1069,19 +1056,21 @@ function Login() {
     return flagged;
   });
   const [busy, setBusy] = useState(false);
-  // BLOC 11 : vrai tant que la verification post-connexion est en cours. Cet
-  // etat a la priorite sur `if (user)` : il empeche PostLoginRedirect de partir
-  // vers /admin pendant que le controle d'agence suspendue est encore en vol.
-  const [awaitingRedirect, setAwaitingRedirect] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  // Vrai uniquement PENDANT la vérification post-connexion (`getAccountState`) :
+  // empêche `PostLoginRedirect` de rediriger avant d'avoir contrôlé un compte
+  // désactivé, puis repasse à `false` dès la vérification terminée afin que
+  // `if (user) return <PostLoginRedirect />` redirige immédiatement sans blocage.
+  const [checkingAccount, setCheckingAccount] = useState(false);
   const submit = async (values: LoginFormValues) => {
     setError('');
     setBlockedNotice(false);
     setBusy(true);
+    setCheckingAccount(true);
     try {
       const signedInUser = await signIn(values.email, values.password);
-      // BLOC 11 : `signIn` peut renvoyer null sans lever d'erreur. Avant, ce cas
-      // ne produisait AUCUN message et AUCUNE navigation : bouton sans effet.
       if (!signedInUser) {
+        setCheckingAccount(false);
         setError(
           'Supabase a accepté la connexion mais n’a renvoyé aucun utilisateur. ' +
           'Rechargez la page et réessayez ; si le problème persiste, contactez l’administrateur.',
@@ -1095,26 +1084,24 @@ function Login() {
           sessionStorage.setItem(SESSION_BLOCK_KEY, '1');
           await Promise.resolve(signOut()).catch(() => undefined);
           sessionStorage.removeItem(SESSION_BLOCK_KEY);
+          setCheckingAccount(false);
           setBlockedNotice(true);
           return;
         }
       } catch (accountError) {
-        // Statut momentanément illisible : les gardes de routes revérifient.
-        // On ne bloque pas la connexion, mais l'erreur n'est plus avalée.
         console.warn('etat_du_compte_illisible', accountError);
       }
-      // La redirection est portée par PostLoginRedirect dès que la session est
-      // propagée : un seul chemin, fondé sur le rôle réellement lu en base.
-      // Avant, un `catch { navigate('/dashboard') }` envoyait silencieusement un
-      // administrateur plateforme vers l'espace agence au moindre incident réseau.
-      setAwaitingRedirect(true);
+      // Vérification terminée : on libère `checkingAccount` pour laisser
+      // `PostLoginRedirect` rediriger immédiatement vers `/admin` ou `/dashboard`.
+      setCheckingAccount(false);
     } catch (e) {
+      setCheckingAccount(false);
       setError(getSupabaseErrorMessage(e, 'ouvrir une session'));
     } finally {
       setBusy(false);
     }
   };
-  if (awaitingRedirect) {
+  if (checkingAccount && user) {
     return (
       <div className="auth-loading">
         <div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div>
@@ -1122,13 +1109,12 @@ function Login() {
       </div>
     );
   }
-  // BLOC 11 : session deja ouverte -> redirection AUTOMATIQUE selon le role,
-  // et non plus un ecran statique attendant un clic.
+  // Session ouverte et contrôle terminé -> redirection automatique selon le rôle.
   if (user) return <PostLoginRedirect />;
   // BLOC 9 : page publique -> retour vers l'accueil, cible 44 px, visible sur mobile.
   return <div className="login-page"><div className="public-back-row"><BackButton to="/" label="Retour à l’accueil" testId="button-back-login" /></div><div className="login-aside"><Link href="/" className="brand-lockup" data-testid="link-login-brand"><BrandMark /><div><div className="brand-name">sofia immobilier</div><div className="brand-caption">L’espace de votre agence</div></div></Link><div className="login-aside-copy"><span className="eyebrow">Bamako · Espace professionnel</span><h1>Le suivi de votre agence, <em>en un seul endroit.</em></h1><p>Retrouvez vos biens, vos contacts et les prochaines étapes commerciales dans un espace fiable, réservé à votre équipe.</p><div className="login-aside-rule"><ShieldCheck size={16} /><span>Connexion sécurisée · accès selon votre rôle</span></div></div><span className="login-aside-foot">SOFIA IMMOBILIER <span>—</span> GESTION D’AGENCE</span></div><main className="login-main"><div className="login-card"><span className="form-kicker">Bon retour</span><h2>Se connecter</h2><p>Connectez-vous avec les identifiants de votre compte existant.</p><Form {...form}><form onSubmit={form.handleSubmit(submit)} className="login-form">
-    <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" autoComplete="email" placeholder="vous@agence.ml" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />
-    <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type="password" autoComplete="current-password" placeholder="Votre mot de passe" data-testid="input-login-password" /></FormControl></div><FormMessage /></FormItem>} />
+    <FormField control={form.control} name="email" render={({ field }) => <FormItem><FormLabel>Adresse e-mail</FormLabel><div className="login-input-wrap"><Mail size={15} aria-hidden="true" /><FormControl><Input {...field} type="email" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="email" placeholder="vous@agence.ml" data-testid="input-login-email" /></FormControl></div><FormMessage /></FormItem>} />
+    <FormField control={form.control} name="password" render={({ field }) => <FormItem><FormLabel>Mot de passe</FormLabel><div className="login-input-wrap has-toggle"><LockKeyhole size={15} aria-hidden="true" /><FormControl><Input {...field} type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="Votre mot de passe" data-testid="input-login-password" /></FormControl><button type="button" className="login-password-toggle" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'} data-testid="button-toggle-login-password">{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button></div><FormMessage /></FormItem>} />
     {(blockedNotice) && <p className="form-error login-blocked-notice" role="alert" data-testid="status-account-disabled">Votre compte agence est désactivé. Contactez l’administrateur.</p>}
     {(error || configurationError || initializationError) && <p className="form-error" role="alert" data-testid="status-login-error">{error || configurationError || initializationError}</p>}<Button type="submit" className="login-submit" disabled={busy || !!configurationError || !!initializationError} data-testid="button-login-submit">{busy ? 'Connexion…' : 'Se connecter'} <ArrowRight size={15} /></Button>
   </form></Form><div className="login-footnote"><ShieldCheck size={14} /> Nouvelle agence ? <Link href="/inscription" className="text-action" data-testid="link-signup-from-login">Créer un compte</Link></div></div><span className="login-copyright">© {new Date().getFullYear()} Sofia Immobilier · Bamako</span></main></div>;
@@ -1170,11 +1156,19 @@ function ProfileRoute() {
   return <WorkspaceGate><ProfilePage /></WorkspaceGate>;
 }
 
+function PaymentReturnGate() {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="auth-loading"><div className="brand-lockup"><BrandMark /><div className="brand-name">sofia immobilier</div></div><LoadingRows label="Chargement de votre confirmation de paiement" /></div>;
+  if (!user) return <Login />;
+  return <ErrorBoundary resetKey={user.id}><PaymentReturnPage /></ErrorBoundary>;
+}
+
 function RoutedContent() {
   const [path] = useLocation();
   if (path === '/login') return <Login />;
   if (path === '/inscription') return <SignupPage />;
   if (path === '/onboarding') return <OnboardingPage />;
+  if (path === '/paiement/retour') return <PaymentReturnGate />;
   // Page publique : aucun compte requis, le jeton d'invitation fait foi.
   if (path === '/rejoindre') return <JoinAgencyPage />;
   if (path === '/profil') return <ProfileRoute />;
@@ -1211,6 +1205,7 @@ function RoutedContent() {
     <Route path="/automatisations" component={AutomationsPage} />
     <Route path="/agence" component={AgencyPage} />
     <Route path="/mon-offre" component={MyOfferPage} />
+    <Route path="/notifications" component={NotificationsCenterPage} />
     <Route path="/equipe" component={TeamPage} />
     <Route path="/parametres" component={SettingsPage} />
     <Route component={NotFound} />

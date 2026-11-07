@@ -64,6 +64,9 @@ const errorLabels: Record<string, string> = {
   agency_unavailable: 'Cette agence n’est plus disponible.',
   member_limit_reached: 'La limite d’utilisateurs de votre offre est atteinte.',
   email_already_exists: 'Cette adresse e-mail est déjà utilisée par un compte.',
+  invalid_email: 'Veuillez saisir une adresse e-mail valide.',
+  agency_context_full_name_email_and_role_are_required:
+    'Le nom complet, l’adresse e-mail et le rôle sont obligatoires.',
   role_not_allowed: 'Ce rôle n’est pas autorisé.',
   password_too_short: 'Le mot de passe est trop court (8 caractères minimum).',
   too_many_attempts: 'Trop de tentatives. Réessayez dans une heure.',

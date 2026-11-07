@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowDownRight, ArrowUpRight, Award, Building2, Download, TrendingUp } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Award, Building2, CreditCard, Download, TrendingUp, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAllRevenueOperations, useAllAgencies } from '@/lib/data-hooks';
+import { usePlatformRevenueReport } from '@/lib/admin-billing-api';
 import type { RevenueOperationRow } from '@/lib/database.types';
 import { AdminHeading } from './admin-shell';
 import { ErrorState, LoadingRows, cash, downloadCsv, useSafeRetry } from '@/lib/workspace-ui';
@@ -30,6 +31,7 @@ const adminPeriods: Array<{ key: PeriodKey; label: string }> = [
 export default function AdminRevenuePage() {
   const operationsQ = useAllRevenueOperations();
   const agenciesQ = useAllAgencies();
+  const platformReportQ = usePlatformRevenueReport(12);
   const [period, setPeriod] = useState<PeriodKey>('year');
 
   const operations = useMemo(() => operationsQ.data ?? [], [operationsQ.data]);
@@ -108,13 +110,53 @@ export default function AdminRevenuePage() {
       <AdminHeading
         eyebrow="Pilotage financier"
         title="Chiffre d’affaires plateforme"
-        description="Recette cumulée de toutes les agences, CA par agence et classement — calculs temps réel depuis les opérations enregistrées."
+        description="Suivi financier distinct des abonnements SaaS, des installations physiques et du volume d’opérations immobilières des agences."
         action={
           <Button variant="outline" onClick={exportCsv} data-testid="button-export-admin-revenue">
             <Download size={14} /> Export CSV
           </Button>
         }
       />
+
+      {platformReportQ.data?.totals && (
+        <section className="panel" style={{ marginBottom: 18 }} data-testid="panel-platform-financial-streams">
+          <div className="panel-head">
+            <div>
+              <h2>Recettes propres Sofia Immobilier (séparation comptable stricte)</h2>
+              <p>
+                Les frais d’installation physique sur site sont comptabilisés séparément des abonnements mensuels récurrents.
+              </p>
+            </div>
+            <CreditCard size={17} />
+          </div>
+          <div className="kpi-grid kpi-grid-compact">
+            <div className="kpi-card accent-teal" data-testid="kpi-revenue-subscriptions-collected">
+              <div className="kpi-top">
+                <span>Abonnements récurrents encaissés</span>
+                <span className="kpi-icon"><CreditCard size={14} /></span>
+              </div>
+              <strong className="kpi-value">
+                {cash(Number(platformReportQ.data.totals.encaisse ?? 0), 'XOF')}
+              </strong>
+              <div className="kpi-foot">
+                {platformReportQ.data.totals.paiements_valides ?? 0} paiement(s) d’abonnement · MRR actif {cash(Number(platformReportQ.data.totals.mensualite_total ?? 0), 'XOF')}/mois
+              </div>
+            </div>
+            <div className="kpi-card accent-amber" data-testid="kpi-revenue-physical-installations">
+              <div className="kpi-top">
+                <span>Installations physiques</span>
+                <span className="kpi-icon"><Wrench size={14} /></span>
+              </div>
+              <strong className="kpi-value">
+                {cash(Number(platformReportQ.data.totals.installations_physiques_total ?? 0), 'XOF')}
+              </strong>
+              <div className="kpi-foot">
+                {platformReportQ.data.totals.installations_physiques_nombre ?? 0} installation(s) sur site · ce mois : {cash(Number(platformReportQ.data.totals.installations_physiques_mois ?? 0), 'XOF')} (hors SasPay)
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="list-toolbar revenue-toolbar" aria-label="Filtre de période globale">
         <label className="revenue-period-select">

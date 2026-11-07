@@ -71,15 +71,31 @@ export type AgencyPlanStateValue =
   | 'suspended'
   | 'missing';
 
+export type AgencyBillingPhase =
+  | 'pending'
+  | 'trial'
+  | 'active_paid'
+  | 'active_unpaid_open'
+  | 'grace_period'
+  | 'suspended_unpaid'
+  | 'suspended_admin'
+  | 'cancelled'
+  | 'no_plan';
+
 export interface AgencyPlanState {
   found: boolean;
   agency_id?: string;
   agency_status?: string;
+  suspended_at?: string | null;
+  suspended_reason?: string | null;
+  installation_status?: string | null;
   state: AgencyPlanStateValue;
+  billing_phase?: AgencyBillingPhase;
   has_plan: boolean;
   subscription_id?: string | null;
   subscription_status?: string | null;
   plan_id?: string | null;
+  plan_code?: string | null;
   plan_name?: string | null;
   plan_price_monthly?: number | null;
   plan_setup_fee?: number | null;
@@ -88,8 +104,20 @@ export interface AgencyPlanState {
   trial_days_left?: number | null;
   starts_at?: string | null;
   ends_at?: string | null;
+  current_period_start?: string | null;
+  current_period_end?: string | null;
+  paid_through_at?: string | null;
+  is_current_period_paid?: boolean;
   days_to_due?: number | null;
   grace_days?: number;
+  grace_ends_at?: string | null;
+  grace_days_left?: number | null;
+  grace_hours_left?: number | null;
+  open_invoice_id?: string | null;
+  open_invoice_kind?: string | null;
+  open_invoice_amount?: number | null;
+  open_invoice_due_at?: string | null;
+  open_invoice_reference?: string | null;
   is_locked: boolean;
   requires_action: boolean;
 }
@@ -139,7 +167,8 @@ export function useAgencyPlan(agencyId?: string) {
         p_agency_id: agencyId as string,
       });
       if (error) throw error;
-      return (data as CurrentPlan | null) ?? null;
+      const resolved = Array.isArray(data) ? (data[0] ?? null) : data;
+      return (resolved as CurrentPlan | null) ?? null;
     },
   });
 }

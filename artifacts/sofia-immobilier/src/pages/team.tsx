@@ -1,19 +1,20 @@
-// LOT A (point 4) — PAGE ÉQUIPE.
+// LOT A (point 4) & LOT 8 — PAGE ÉQUIPE (création directe d'accès uniquement).
 // Réservée au propriétaire et aux administrateurs de l'agence.
 // Toute autorisation est tranchée côté serveur (has_agency_role sur le JWT) :
 // cette page ne fait qu'afficher et transmettre, elle n'accorde rien.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Check, Copy, KeyRound, Link2, LockKeyhole, MessageCircle, RotateCcw, ShieldAlert, ShieldCheck,
-  UserPlus, UserRound, UserX, UsersRound, X,
+  Check, Copy, KeyRound, LockKeyhole, RotateCcw, ShieldAlert,
+  UserCheck, UserPlus, UserRound, UserX, UsersRound, X,
 } from 'lucide-react';
-import { ButtonPrimary, ErrorState, Heading, LoadingRows, roleNames, useSafeRetry, safeFormat } from '@/lib/workspace-ui';
+import { ButtonPrimary, ErrorState, Heading, LoadingRows, roleNames, useSafeRetry } from '@/lib/workspace-ui';
+import { Input } from '@/components/ui/input';
 import { useAgency } from '@/lib/agency-context';
 import { getSupabaseClient, getSupabaseErrorMessage } from '@/lib/supabase';
 import {
-  createAgencyInvitation, createAgencyMember, fetchSeatInfo, resetAgentPassword,
-  teamErrorLabel, teamErrorDiagnostic, type CreatedInvitation, type SeatInfo, type TeamRole,
+  createAgencyMember, fetchSeatInfo, resetAgentPassword,
+  teamErrorLabel, teamErrorDiagnostic, type SeatInfo, type TeamRole,
 } from '@/lib/agency-team-api';
 
 interface TeamMember {
@@ -27,7 +28,7 @@ interface TeamMember {
   email: string | null;
 }
 
-const MIN_PASSWORD_LENGTH = 8;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const rosterQueryKey = (agencyId?: string) => ['equipe', 'roster', agencyId];
 const seatQueryKey = (agencyId?: string) => ['equipe', 'places', agencyId];
@@ -38,12 +39,6 @@ function useTeamRoster(agencyId?: string) {
     enabled: Boolean(agencyId),
     queryFn: async (): Promise<TeamMember[]> => {
       if (!agencyId) return [];
-      // Jointure vers user_profiles : la politique RLS
-      // « user_profiles_select_agency_colleagues » autorise la lecture entre
-      // membres actifs d'une même agence. Le cast contourne les types générés,
-      // incomplets pour cette jointure.
-      // Les tables metier vivent dans le schema saas_immobilier (comme db() de
-      // data-hooks.ts). Sans .schema(), PostgREST cherche dans public et echoue.
       const { data, error } = await (getSupabaseClient().schema('saas_immobilier') as unknown as {
         from: (t: string) => {
           select: (cols: string) => { eq: (c: string, v: string) => { order: (c: string, o: { ascending: boolean }) => Promise<{ data: unknown; error: unknown }> } };
@@ -96,6 +91,7 @@ function useSetMemberStatus(agencyId?: string) {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: rosterQueryKey(agencyId) }),
         queryClient.invalidateQueries({ queryKey: seatQueryKey(agencyId) }),
+        queryClient.invalidateQueries({ queryKey: ['sofia', 'roster', agencyId] }),
       ]);
     },
   });
@@ -126,16 +122,6 @@ function CopyField({ value, label, testId }: { value: string; label: string; tes
   );
 }
 
-function whatsappLink(invitationUrl: string | null, token: string, agencyName: string) {
-  const url = invitationUrl ?? token;
-  const message =
-    `Bonjour !\n\nVoici votre lien d'accès à l'agence ${agencyName} sur Sofia Immobilier :\n${url}\n\n` +
-    `Ce lien est valable 48 heures et ne fonctionne qu'une seule fois. ` +
-    `Il vous permettra de créer votre compte et de choisir votre mot de passe.\n\n` +
-    `À bientôt !`;
-  return `https://wa.me/?text=${encodeURIComponent(message)}`;
-}
-
 export default function TeamPage() {
   const { activeAgency, activeAgencyId, canManageAgency, activeMembership } = useAgency();
   const roster = useTeamRoster(activeAgencyId);
@@ -148,14 +134,11 @@ export default function TeamPage() {
   const [role, setRole] = useState<TeamRole>('agent');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  // Ton du message : plus de détection par mots-clés dans la phrase affichée.
   const [messageTone, setMessageTone] = useState<'info' | 'error'>('info');
-  // BLOC 1 (session 3) : diagnostic exact (étape + code + message) en cas d'échec.
   const [diagnostic, setDiagnostic] = useState<ReturnType<typeof teamErrorDiagnostic> | null>(null);
-  const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null);
-  const [invitation, setInvitation] = useState<CreatedInvitation | null>(null);
-  const [invitingRole, setInvitingRole] = useState<TeamRole>('agent');
-  // BLOC 5 : réinitialisation du mot de passe d'un membre.
+  const [created, setCreated] = useState<{ fullName: string; email: string; tempPassword: string } | null>(null);
+  const [copiedBundle, setCopiedBundle] = useState(false);
+
   const [resetTarget, setResetTarget] = useState<TeamMember | null>(null);
   const [resetResult, setResetResult] = useState<{ name: string; email: string; tempPassword: string } | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
@@ -171,27 +154,52 @@ export default function TeamPage() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: rosterQueryKey(activeAgencyId) }),
       queryClient.invalidateQueries({ queryKey: seatQueryKey(activeAgencyId) }),
+      queryClient.invalidateQueries({ queryKey: ['sofia', 'roster', activeAgencyId] }),
     ]);
   };
 
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!activeAgencyId || busy) return;
+
+    const cleanName = fullName.trim();
+    const cleanEmail = email.replace(/\s+/g, '').toLowerCase();
+
+    if (cleanName.length < 2) {
+      setMessageTone('error');
+      setMessage('Veuillez renseigner le nom complet du collaborateur.');
+      return;
+    }
+    if (!EMAIL_RE.test(cleanEmail)) {
+      setMessageTone('error');
+      setMessage('Veuillez saisir une adresse e-mail valide.');
+      return;
+    }
+
     setBusy(true);
     setMessage('');
     setDiagnostic(null);
     setCreated(null);
+    setCopiedBundle(false);
     try {
-      const result = await createAgencyMember({ agencyId: activeAgencyId, fullName, email, role });
-      setCreated({ email: result.invited_email, tempPassword: result.temp_password });
+      const result = await createAgencyMember({
+        agencyId: activeAgencyId,
+        fullName: cleanName,
+        email: cleanEmail,
+        role,
+      });
+      setCreated({
+        fullName: cleanName,
+        email: result.invited_email,
+        tempPassword: result.temp_password,
+      });
       setFullName('');
       setEmail('');
+      setRole('agent');
       setMessageTone('info');
-      setMessage('Membre créé. Transmettez le mot de passe temporaire : il ne sera plus affiché.');
+      setMessage('Accès créé avec succès. Transmettez le mot de passe temporaire : il ne sera plus affiché.');
       await refresh();
     } catch (error) {
-      // (c) Le message complet de teamErrorLabel est affiché tel quel :
-      // libellé français + détail serveur + code + HTTP. Rien n'est masqué.
       setMessageTone('error');
       setMessage(teamErrorLabel(error));
       setDiagnostic(teamErrorDiagnostic(error, 'création directe du compte agent'));
@@ -200,31 +208,34 @@ export default function TeamPage() {
     }
   };
 
-  const submitInvite = async () => {
-    if (!activeAgencyId || busy) return;
-    setBusy(true);
-    setMessage('');
-    setDiagnostic(null);
-    setInvitation(null);
+  const copyCreatedBundle = async () => {
+    if (!created) return;
+    const agencyLabel = activeAgency?.name ?? 'votre agence';
+    const text =
+      `Bonjour ${created.fullName},\n\n` +
+      `Votre accès à ${agencyLabel} sur Sofia Immobilier est prêt :\n` +
+      `• E-mail : ${created.email}\n` +
+      `• Mot de passe temporaire : ${created.tempPassword}\n\n` +
+      `Vous devrez choisir un nouveau mot de passe dès votre première connexion.`;
     try {
-      const result = await createAgencyInvitation({ agencyId: activeAgencyId, role: invitingRole });
-      setInvitation(result);
-      setMessageTone('info');
-      setMessage('Lien d’invitation créé. Partagez-le : il ne sera plus affiché.');
-      await refresh();
-    } catch (error) {
-      setMessageTone('error');
-      setMessage(teamErrorLabel(error));
-      setDiagnostic(teamErrorDiagnostic(error, 'génération du lien d’invitation'));
-    } finally {
-      setBusy(false);
+      await navigator.clipboard.writeText(text);
+      setCopiedBundle(true);
+      window.setTimeout(() => setCopiedBundle(false), 2500);
+    } catch {
+      setCopiedBundle(false);
     }
   };
 
   const toggleStatus = async (member: TeamMember) => {
     if (member.role === 'owner') return;
     const next = member.status === 'active' ? 'inactive' : 'active';
+    if (next === 'active' && seatsFull) {
+      setMessageTone('error');
+      setMessage('Limite d’utilisateurs atteinte : libérez une place ou changez d’offre avant de réactiver cet accès.');
+      return;
+    }
     setMessage('');
+    setDiagnostic(null);
     try {
       await setStatus.mutateAsync({ id: member.id, status: next });
       setMessageTone('info');
@@ -235,12 +246,11 @@ export default function TeamPage() {
     }
   };
 
-  // BLOC 5 : le mot de passe est généré côté serveur (Edge Function
-  // `reset-agent-password`) et n'est affiché qu'une seule fois.
   const confirmResetPassword = async () => {
     if (!resetTarget || resetBusy) return;
     setResetBusy(true);
     setMessage('');
+    setDiagnostic(null);
     setResetResult(null);
     try {
       const result = await resetAgentPassword({ membershipId: resetTarget.id });
@@ -288,7 +298,7 @@ export default function TeamPage() {
       <Heading
         eyebrow="Votre organisation"
         title="Équipe"
-        description="Créez des accès, invitez des agents et suivez les places de votre offre."
+        description="Créez directement les accès de vos agents et administrateurs et suivez les places de votre offre."
       />
 
       <div className="team-layout">
@@ -304,104 +314,91 @@ export default function TeamPage() {
             </div>
             <UsersRound size={20} />
           </div>
-          <div className="seat-bar" aria-hidden="true">
-            <span style={{ width: unlimited ? '8%' : `${Math.min(100, seatsLimit ? (seatsUsed / seatsLimit) * 100 : 0)}%` }} />
-          </div>
-          <p className="seat-detail">
-            {unlimited
-              ? 'Votre offre ne fixe aucune limite d’utilisateurs.'
-              : seatsFull
-                ? 'Limite atteinte : désactivez un accès ou changez d’offre pour en ajouter.'
-                : `${seatInfo?.available ?? 0} place(s) encore disponible(s). Les invitations en attente sont comptées.`}
-          </p>
-          {Number(seatInfo?.invitations_pending ?? 0) > 0 && (
-            <p className="seat-pending" data-testid="text-pending-invitations">
-              {seatInfo?.invitations_pending} invitation(s) en attente, déjà décomptée(s).
+          <div className="team-panel-body">
+            <div className="seat-bar" aria-hidden="true">
+              <span style={{ width: unlimited ? '8%' : `${Math.min(100, seatsLimit ? (seatsUsed / seatsLimit) * 100 : 0)}%` }} />
+            </div>
+            <p className="seat-detail">
+              {unlimited
+                ? 'Votre offre ne fixe aucune limite d’utilisateurs.'
+                : seatsFull
+                  ? 'Limite atteinte : désactivez un accès ou changez d’offre pour en ajouter.'
+                  : `${seatInfo?.available ?? 0} place(s) encore disponible(s) sur votre offre.`}
             </p>
-          )}
+          </div>
         </section>
 
-        <section className="panel">
+        <section className="panel team-create-panel" data-testid="panel-create-member">
           <div className="panel-head">
-            <div><h2>Créer un accès directement</h2><p>Le mot de passe temporaire n’est affiché qu’une seule fois.</p></div>
+            <div>
+              <h2>Créer un accès</h2>
+              <p>Créez immédiatement le compte d’un collaborateur. Le mot de passe temporaire n’est affiché qu’une seule fois.</p>
+            </div>
             <UserPlus size={18} />
           </div>
-          <form className="form-field" onSubmit={(event) => void submitCreate(event)}>
-            <label>
-              <span>Nom complet</span>
-              <input value={fullName} onChange={(e) => setFullName(e.target.value)} required placeholder="Aminata Diallo" data-testid="input-member-name" />
-            </label>
-            <label>
-              <span>Adresse e-mail</span>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="aminata@agence.ml" data-testid="input-member-email" />
-            </label>
-            <label>
-              <span>Rôle</span>
-              <select className="form-select" value={role} onChange={(e) => setRole(e.target.value as TeamRole)} data-testid="select-member-role">
-                <option value="agent">Agent</option>
-                <option value="admin">Administrateur</option>
-              </select>
-            </label>
-            <div className="form-actions">
-              <ButtonPrimary testId="button-create-member" onClick={() => undefined} disabled={busy || seatsFull}>
-                <UserPlus size={14} /> {busy ? 'Création…' : 'Créer l’accès'}
-              </ButtonPrimary>
-              {seatsFull && <span className="form-error">Limite d’utilisateurs atteinte.</span>}
-            </div>
-          </form>
-          {created && (
-            <div className="reveal-box" data-testid="box-temp-password">
-              <div className="reveal-head"><KeyRound size={15} /><strong>Identifiants à transmettre</strong></div>
-              <CopyField label="Adresse e-mail" value={created.email} testId="text-created-email" />
-              <CopyField label="Mot de passe temporaire" value={created.tempPassword} testId="text-temp-password" />
-              <p className="privacy-note-text">
-                Ce mot de passe ne sera plus affiché. La personne devra le changer à sa première connexion.
-              </p>
-            </div>
-          )}
-        </section>
-
-        <section className="panel">
-          <div className="panel-head">
-            <div><h2>Lien d’invitation</h2><p>Valable 48 heures, usage unique. Aucun e-mail n’est envoyé.</p></div>
-            <Link2 size={18} />
+          <div className="team-panel-body">
+            <form className="team-create-form" onSubmit={(event) => void submitCreate(event)}>
+              <label className="team-field">
+                <span>Nom complet</span>
+                <Input
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                  autoComplete="name"
+                  placeholder="Aminata Diallo"
+                  data-testid="input-member-name"
+                />
+              </label>
+              <label className="team-field">
+                <span>Adresse e-mail</span>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="aminata@agence.ml"
+                  data-testid="input-member-email"
+                />
+              </label>
+              <label className="team-field">
+                <span>Rôle</span>
+                <select className="form-select" value={role} onChange={(e) => setRole(e.target.value as TeamRole)} data-testid="select-member-role">
+                  <option value="agent">Agent</option>
+                  <option value="admin">Administrateur</option>
+                </select>
+              </label>
+              <div className="form-actions">
+                <ButtonPrimary type="submit" testId="button-create-member" disabled={busy || seatsFull}>
+                  <UserPlus size={14} /> {busy ? 'Création…' : 'Créer l’accès'}
+                </ButtonPrimary>
+                {seatsFull && <span className="form-error">Limite d’utilisateurs atteinte.</span>}
+              </div>
+            </form>
+            {created && (
+              <div className="reveal-box" data-testid="box-temp-password">
+                <div className="reveal-head"><KeyRound size={15} /><strong>Identifiants à transmettre</strong></div>
+                <CopyField label="Adresse e-mail" value={created.email} testId="text-created-email" />
+                <CopyField label="Mot de passe temporaire" value={created.tempPassword} testId="text-temp-password" />
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="button-link"
+                    onClick={() => void copyCreatedBundle()}
+                    data-testid="button-copy-member-bundle"
+                  >
+                    {copiedBundle ? <Check size={14} /> : <Copy size={14} />}
+                    {copiedBundle ? 'Message copié' : 'Copier le message complet'}
+                  </button>
+                </div>
+                <p className="privacy-note-text">
+                  Ce mot de passe ne sera plus affiché. La personne devra le changer à sa première connexion.
+                </p>
+              </div>
+            )}
           </div>
-          <div className="form-field">
-            <label>
-              <span>Rôle proposé</span>
-              <select className="form-select" value={invitingRole} onChange={(e) => setInvitingRole(e.target.value as TeamRole)} data-testid="select-invitation-role">
-                <option value="agent">Agent</option>
-                <option value="admin">Administrateur</option>
-              </select>
-            </label>
-            <div className="form-actions">
-              <ButtonPrimary testId="button-create-invitation" onClick={() => void submitInvite()} disabled={busy || seatsFull}>
-                <Link2 size={14} /> {busy ? 'Création…' : 'Générer le lien'}
-              </ButtonPrimary>
-            </div>
-          </div>
-          {invitation && (
-            <div className="reveal-box" data-testid="box-invitation">
-              <div className="reveal-head"><ShieldCheck size={15} /><strong>Lien à partager</strong></div>
-              {invitation.invitation_url
-                ? <CopyField label="Lien d’invitation" value={invitation.invitation_url} testId="text-invitation-url" />
-                : <CopyField label="Jeton d’invitation" value={invitation.token} testId="text-invitation-token" />}
-              <p className="privacy-note-text">
-                Ce lien ne sera plus affiché : la base n’en conserve que l’empreinte. Expire le {safeFormat(invitation.expires_at, { dateStyle: 'medium', timeStyle: 'short' })}.
-              </p>
-              {invitation.invitation_url && (
-                <a
-                  className="button-link whatsapp-link"
-                  href={whatsappLink(invitation.invitation_url, invitation.token, activeAgency?.name ?? 'votre agence')}
-                  target="_blank"
-                  rel="noreferrer"
-                  data-testid="link-invitation-whatsapp"
-                >
-                  <MessageCircle size={15} /> Ouvrir dans WhatsApp
-                </a>
-              )}
-            </div>
-          )}
         </section>
 
         <section className="panel roster-panel">
@@ -414,6 +411,7 @@ export default function TeamPage() {
               {roster.data.map((member) => {
                 const isOwner = member.role === 'owner';
                 const isSelf = member.user_id === activeMembership?.user_id;
+                const isActive = member.status === 'active';
                 return (
                   <div className="roster-row" key={member.id} data-testid={`row-member-${member.id}`}>
                     <span className="roster-avatar"><UserRound size={15} /></span>
@@ -422,9 +420,9 @@ export default function TeamPage() {
                       <span>{member.email || member.user_id.slice(0, 8) + '••••'}</span>
                     </div>
                     <span className="member-role">{roleNames[member.role] ?? member.role}</span>
-                    <span className={`membership-status membership-${member.status}`}>{member.status === 'active' ? 'Actif' : 'Désactivé'}</span>
-                    {/* BLOC 5 : réinitialisation du mot de passe — jamais sur le
-                        propriétaire, jamais sur soi-même. */}
+                    <span className={`membership-status membership-${isActive ? 'active' : 'inactive'}`}>
+                      {isActive ? 'Actif' : 'Désactivé'}
+                    </span>
                     {!isOwner && (
                       <button
                         type="button"
@@ -446,11 +444,11 @@ export default function TeamPage() {
                         className="icon-button"
                         onClick={() => void toggleStatus(member)}
                         disabled={setStatus.isPending || isSelf}
-                        title={isSelf ? 'Vous ne pouvez pas désactiver votre propre accès' : member.status === 'active' ? 'Désactiver cet accès' : 'Réactiver cet accès'}
-                        aria-label={member.status === 'active' ? `Désactiver ${member.full_name ?? 'ce membre'}` : `Réactiver ${member.full_name ?? 'ce membre'}`}
+                        title={isSelf ? 'Vous ne pouvez pas désactiver votre propre accès' : isActive ? 'Désactiver cet accès' : 'Réactiver cet accès'}
+                        aria-label={isActive ? `Désactiver ${member.full_name ?? 'ce membre'}` : `Réactiver ${member.full_name ?? 'ce membre'}`}
                         data-testid={`button-toggle-member-${member.id}`}
                       >
-                        <UserX size={14} />
+                        {isActive ? <UserX size={14} /> : <UserCheck size={14} />}
                       </button>
                     )}
                   </div>
@@ -460,7 +458,7 @@ export default function TeamPage() {
           ) : (
             <div className="empty-table" data-testid="empty-team-roster">
               <strong>Aucun membre</strong>
-              <p>Créez un accès ou partagez un lien d’invitation.</p>
+              <p>Créez un premier accès depuis le formulaire ci-dessus.</p>
             </div>
           )}
         </section>
@@ -511,8 +509,6 @@ export default function TeamPage() {
         </p>
       )}
 
-      {/* BLOC 1 (session 3) — DIAGNOSTIC : étape, code, message exact.
-          Plus jamais d'échec silencieux sur la création d'un agent. */}
       {diagnostic && (
         <div className="state-card compact-empty" role="alert" data-testid="panel-team-diagnostic">
           <div className="state-icon"><ShieldAlert size={19} /></div>
